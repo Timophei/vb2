@@ -40,3 +40,17 @@ function openai_mock(string $path, array $p): array
     preg_match('/## Текущий этап: (.+)/u', $p['messages'][0]['content'], $m);
     return ['choices' => [['message' => ['content' => "(тестовый ответ без модели) Этап: " . ($m[1] ?? '?') . ". Спасибо за сообщение!"]]], 'usage' => ['total_tokens' => 900]];
 }
+
+/** Портал-заглушка: поля лида как на типичном портале (+ поля «Виза: …» из v1). */
+function b24_mock(string $method, array $p): array
+{
+    if ($method === 'crm.lead.fields') return ['result' => [
+        'TITLE' => ['type' => 'string', 'title' => 'Название лида'], 'NAME' => ['type' => 'string', 'title' => 'Имя'], 'LAST_NAME' => ['type' => 'string', 'title' => 'Фамилия'],
+        'SOURCE_DESCRIPTION' => ['type' => 'string', 'title' => 'Дополнительно об источнике'], 'OPPORTUNITY' => ['type' => 'double', 'title' => 'Сумма'],
+        'PHONE' => ['type' => 'crm_multifield', 'title' => 'Телефон', 'isMultiple' => true], 'BIRTHDATE' => ['type' => 'date', 'title' => 'Дата рождения'],
+        'UF_CRM_VISA_COUNTRY' => ['type' => 'string', 'formLabel' => 'Виза: страна / направление'], 'UF_CRM_VISA_CITY' => ['type' => 'string', 'formLabel' => 'Виза: город подачи'],
+        'UF_CRM_VISA_DATES' => ['type' => 'string', 'formLabel' => 'Виза: предполагаемые даты'], 'UF_CRM_VISA_APPLICANTS' => ['type' => 'string', 'formLabel' => 'Виза: количество заявителей'],
+        'UF_CRM_1690000001' => ['type' => 'enumeration', 'formLabel' => 'Услуга', 'items' => [['ID' => 1, 'VALUE' => 'Визы'], ['ID' => 2, 'VALUE' => 'Green Card США']]],
+    ]];
+    return ['result' => true];
+}

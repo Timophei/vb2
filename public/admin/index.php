@@ -253,8 +253,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 go('tab=settings', 'Сохранено.');
             case 'b24_reference':
                 $view['b24ref'] = b24_reference((int)(sc_setting(scenario_active(), 'hr.smart_entity_type_id') ?? 0));
-                $tab = 'settings';
+                $tab = 'bitrix';
                 break;
+            case 'b24_fields_load':
+                $n = count(b24_lead_fields(true));
+                go('tab=bitrix', "Загружено полей лида: $n. Выберите, куда писать каждое поле бота, и сохраните.");
+            case 'b24_map_save':
+                $map = [];
+                foreach ((array)($_POST['map'] ?? []) as $k => $v) {
+                    $k = (string)$k; $v = (string)$v;
+                    if (!isset(BOT_FIELDS[$k]) && !isset(scenario_active()['slots'][$k])) continue;
+                    if ($v !== '' && $v !== '-' && !preg_match('/^[A-Z0-9_]+$/', $v)) continue;
+                    $map[$k] = $v;
+                }
+                set_setting('b24_map', jenc((object)$map));
+                go('tab=bitrix', 'Сопоставление полей сохранено. Применится при следующей записи в лид.');
 
             /* --- пользователи --- */
             case 'my_password':
@@ -289,7 +302,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-$tabs = ['dialogs' => 'Диалоги', 'sandbox' => 'Песочница', 'scenario' => 'Сценарий', 'catalog' => 'Каталог', 'docs' => 'Материалы', 'settings' => 'Настройки'];
+$tabs = ['dialogs' => 'Диалоги', 'sandbox' => 'Песочница', 'scenario' => 'Сценарий', 'catalog' => 'Каталог', 'docs' => 'Материалы', 'bitrix' => 'Битрикс24', 'settings' => 'Настройки'];
 if (can('users')) $tabs['users'] = 'Пользователи';
 if (!isset($tabs[$tab]) && $tab !== 'me') $tab = 'dialogs';
 $wide = in_array($tab, ['dialogs', 'sandbox'], true);
@@ -316,6 +329,7 @@ switch ($tab) {
     case 'catalog': view_catalog(); break;
     case 'docs': view_docs($view); break;
     case 'settings': view_settings($view); break;
+    case 'bitrix': view_bitrix($view); break;
     case 'users': view_users($me); break;
     case 'me': view_me($me); break;
 }

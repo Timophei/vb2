@@ -52,6 +52,14 @@ function b24_mock(string $method, array $params): array
         'crm.lead.add' => ['result' => 501],
         'crm.item.add' => ['result' => ['item' => ['id' => 77]]],
         'crm.lead.get' => ['result' => ['COMMENTS' => 'заметка менеджера']],
+        'crm.lead.fields' => ['result' => [
+            'TITLE' => ['type' => 'string', 'title' => 'Название'], 'NAME' => ['type' => 'string', 'title' => 'Имя'],
+            'OPPORTUNITY' => ['type' => 'double', 'title' => 'Сумма'], 'PHONE' => ['type' => 'crm_multifield', 'title' => 'Телефон'],
+            'UF_CRM_1700000001' => ['type' => 'string', 'formLabel' => 'Страна визы'],
+            'UF_CRM_1700000002' => ['type' => 'enumeration', 'formLabel' => 'Тариф Green Card', 'items' => [['ID' => '41', 'VALUE' => 'Стандартный'], ['ID' => '42', 'VALUE' => 'Всё включено']]],
+            'UF_CRM_1700000003' => ['type' => 'integer', 'formLabel' => 'Количество участников'],
+            'ID' => ['type' => 'integer', 'title' => 'ID', 'isReadOnly' => true],
+        ]],
         default => ['result' => true],
     };
 }
@@ -185,6 +193,29 @@ $out = say($dlg, 'Грин карта, всё включено');
 check(state($dlg) === 'green_card' && str_contains($out[0], 'нет явного согласия'), 'без согласия — отказ инструмента');
 $out = say($dlg, 'давайте');
 check(state($dlg) === 'green_card' && str_contains($out[0], 'не задана в каталоге'), 'цена не задана — счёт не выставлен');
+
+/* ---------- 2в. Сопоставление полей с существующими полями лида ---------- */
+echo "\n2в. Поля лида: сопоставление с существующими полями Битрикса\n";
+$fl = b24_lead_fields(true);
+check(isset($fl['UF_CRM_1700000002']) && !isset($fl['ID']), 'поля лида загружены (служебные отброшены)');
+check(bot_field_suggest('visa.country', $fl) === 'UF_CRM_1700000001', 'автоподбор: «Виза: страна» → «Страна визы»');
+check(bot_field_suggest('gc.tariff', $fl) === 'UF_CRM_1700000002', 'автоподбор: тариф');
+set_setting('b24_map', jenc(['gc.tariff' => 'UF_CRM_1700000002', 'gc.participants' => 'UF_CRM_1700000003', 'gc.request_type' => '-']));
+$GLOBALS['CLS'] = ['грин карта, тариф всё включено, нас трое' => ['green_card', ['gc.tariff' => 'all_inclusive', 'gc.participants' => '3', 'gc.request_type' => 'new']]];
+$GLOBALS['TOOLS'] = [];
+$dlg = new_dialog('web:map1');
+say($dlg, 'грин карта, тариф всё включено, нас трое');
+$GLOBALS['B24'] = [];
+$GLOBALS['CLS'] = ['можно человека?' => ['ask_human', []]];
+say($dlg, 'можно человека?');
+$upd = array_values(array_filter($GLOBALS['B24'], fn($c) => $c[0] === 'crm.lead.update'));
+$f = $upd[0][1]['fields'] ?? [];
+check(($f['UF_CRM_1700000002'] ?? null) === '42', 'тариф all_inclusive → вариант списка «Всё включено» (ID 42)');
+check(($f['UF_CRM_1700000003'] ?? null) === 3, 'участники → целое число');
+check(!str_contains($f['COMMENTS'] ?? '', 'тип обращения'), '«не передавать» — не пишется');
+check(str_contains($f['COMMENTS'] ?? '', 'Продукт / направление обращения: Green Card США'), 'служебное поле без сопоставления — в комментарий');
+check(str_contains($f['COMMENTS'] ?? '', 'заметка менеджера'), 'заметки менеджеров в комментарии сохранены');
+set_setting('b24_map', '{}');
 
 /* ---------- 3. Глобальные переходы, таймеры, отложено ---------- */
 echo "\n3. Карты: напоминание через 15 мин, «позовите человека», отложено\n";

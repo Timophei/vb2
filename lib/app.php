@@ -16,6 +16,7 @@ require_once __DIR__ . '/clients.php';
 require_once __DIR__ . '/catalog.php';
 require_once __DIR__ . '/telegram.php';
 require_once __DIR__ . '/bitrix.php';
+require_once __DIR__ . '/b24map.php';
 require_once __DIR__ . '/../engine/scenario.php';
 require_once __DIR__ . '/../engine/engine.php';
 require_once __DIR__ . '/../engine/llm.php';

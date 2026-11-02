@@ -99,6 +99,18 @@ function contact_fields($contact): array
  * fields: объект ПОЛЕ => шаблон, или "slots:visa.*" / "slots:all".
  * Слоты без своего поля Б24 (или с TODO) идут текстом в блок бота в «Комментарии».
  */
+/** Служебные слоты — в лид не пишем. */
+const BOT_INTERNAL_SLOTS = '/^(intent|crosssell_done|followup\.return_state|payment\.invoice_id|jobs\.smart_item_id|jobs\.resume_asked|visa\.biometry_questions|handoff_priority)$/';
+
+function payment_currency(array $T): string
+{
+    $code = (string)($T['d']['slots']['payment.invoice_id'] ?? '');
+    if ($code === '') return 'RUB';
+    $st = db()->prepare('SELECT currency FROM payments WHERE code = ?');
+    $st->execute([$code]);
+    return (string)($st->fetchColumn() ?: 'RUB');
+}
+
 function act_b24_update_lead(array &$T, array $a): void
 {
     $spec = $a['fields'] ?? [];
@@ -109,19 +121,37 @@ function act_b24_update_lead(array &$T, array $a): void
 
     if (is_string($spec) && str_starts_with($spec, 'slots:')) {
         $mask = substr($spec, 6);
-        foreach ($T['d']['slots'] as $name => $v) {
-            if ($mask !== 'all' && !fnmatch($mask, $name)) continue;
+        $meta = [];
+        try { $meta = b24_lead_fields(); } catch (Throwable $e) { /* поля не загружены — пишем как текст */ }
+        $vals = $T['d']['slots'] + bot_virtual_values($T);
+        foreach ($vals as $name => $v) {
+            $virtual = str_starts_with($name, '@');
+            if (!$virtual && $mask !== 'all' && !fnmatch($mask, $name)) continue;
+            if (preg_match(BOT_INTERNAL_SLOTS, $name)) continue;
             $def = sc_slot($sc, $name);
+            $type = $def['type'] ?? 'string';
             $txt = value_text($v);
-            if ($txt === '' || in_array($def['type'] ?? '', ['counter'], true)) continue;
-            $bf = $def['b24_field'] ?? null;
-            if (($def['type'] ?? '') === 'contact') { $fields += contact_fields($v); continue; }
-            if (($def['type'] ?? '') === 'fio' && is_array($v)) {
+            if ($txt === '' || in_array($type, ['counter', 'state_ref'], true)) continue;
+            if ($type === 'contact') { $fields += contact_fields($v); continue; }
+            if ($type === 'fio' && is_array($v)) {
                 $fields += array_filter(['LAST_NAME' => $v['last'] ?? '', 'NAME' => $v['first'] ?? '', 'SECOND_NAME' => $v['middle'] ?? '']);
                 continue;
             }
-            if (is_string($bf) && $bf !== '' && !is_todo($bf) && !in_array($bf, ['COMMENTS'], true)) $fields[$bf] = $txt;
-            else $comment[] = ($def['label'] ?? $name) . ': ' . $txt;
+            if ($type === 'file_or_link') { $comment[] = bot_field_label($name, $sc) . ': ' . (isset($v['link']) ? $v['link'] : 'файл ' . ($v['name'] ?? '') . ' (в ленте лида)'); continue; }
+            $target = bot_field_target($sc, $name);
+            if ($target === '-') continue;
+            if ($target === 'PHONE') { $fields += contact_fields(['type' => 'phone', 'value' => $txt]); continue; }
+            if ($target !== '') {
+                $val = isset($meta[$target]) ? b24_value($target, $v, $meta[$target]) : $txt;
+                if ($val !== null) {
+                    $fields[$target] = $val;
+                    if ($target === 'OPPORTUNITY') $fields['CURRENCY_ID'] = payment_currency($T);
+                    continue;
+                }
+                $comment[] = bot_field_label($name, $sc) . ': ' . $txt . ' (не подошло к полю ' . ($meta[$target]['title'] ?? $target) . ')';
+                continue;
+            }
+            $comment[] = bot_field_label($name, $sc) . ': ' . $txt;
         }
     } elseif (is_array($spec)) {
         foreach ($spec as $field => $tplv) {

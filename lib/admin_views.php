@@ -535,6 +535,73 @@ function view_settings(array $view): void
       </ul>
     </div>
 
+    <?php
+}
+
+
+/* ------------------------------------------------------------------ */
+/*  Битрикс24: поля лида, справочник                                   */
+/* ------------------------------------------------------------------ */
+
+function view_bitrix(array $view): void
+{
+    $sc = scenario_active();
+    $smart = (int)(sc_setting($sc, 'hr.smart_entity_type_id') ?? 0);
+    $fields = jdec(setting('b24_lead_fields'));
+    $map = b24_map();
+    $at = setting('b24_lead_fields_at');
+    // поля бота: известные + слоты сценария, которых нет в списке
+    $botFields = BOT_FIELDS;
+    foreach ((array)($sc['slots'] ?? []) as $n => $def) {
+        if (!isset($botFields[$n]) && !preg_match(BOT_INTERNAL_SLOTS, $n) && !in_array($def['type'] ?? '', ['counter', 'state_ref'], true)) $botFields[$n] = [$def['label'] ?? $n, 'Другое'];
+    }
+    $groups = [];
+    foreach ($botFields as $n => [$label, $g]) $groups[$g][$n] = $label;
+    $taken = array_values(array_filter($map, fn($v) => $v !== '' && $v !== '-')); // одно поле Битрикса — одному полю бота
+    $opt = function (string $sel) use ($fields): string {
+        $o = '<option value=""' . ($sel === '' ? ' selected' : '') . '>— в комментарий лида —</option><option value="-"' . ($sel === '-' ? ' selected' : '') . '>— не передавать —</option>';
+        foreach (['Стандартные поля' => false, 'Пользовательские поля' => true] as $title => $custom) {
+            $o .= '<optgroup label="' . $title . '">';
+            foreach ($fields as $code => $f) if ($f['custom'] === $custom) {
+                $o .= '<option value="' . h($code) . '"' . ($sel === $code ? ' selected' : '') . '>' . h($f['title']) . ' · ' . h($code) . ' (' . h($f['type']) . ($f['multiple'] ? ', множ.' : '') . ')</option>';
+            }
+            $o .= '</optgroup>';
+        }
+        if ($sel !== '' && $sel !== '-' && !isset($fields[$sel])) $o .= '<option value="' . h($sel) . '" selected>' . h($sel) . ' (нет в загруженном списке)</option>';
+        return $o;
+    };
+    ?>
+    <div class="card">
+      <h2>Битрикс24</h2>
+      <p class="hint"><?= b24_configured() ? 'Портал: ' . h(b24_portal()) . ' · режим <b>' . h(cfg('bitrix_mode', 'dry')) . '</b>' . (cfg('bitrix_mode') !== 'live' ? ' — в лиды ничего не пишется, в журнале диалога видно, что ушло бы' : ' — лиды пишутся по-настоящему') : '<b class="bad">вебхук не задан в config.php</b>' ?></p>
+      <form method="post" class="inline-btn" style="display:inline"><?= csrf_field('b24_fields_load') ?><button <?= b24_configured() ? '' : 'disabled' ?>><?= $fields ? 'Обновить поля лида с портала' : 'Загрузить поля лида с портала' ?></button></form>
+      <?php if ($at): ?><span class="hint"> загружено <?= h(fmt_dt($at)) ?>: <?= count($fields) ?> полей, из них пользовательских <?= count(array_filter($fields, fn($f) => $f['custom'])) ?></span><?php endif; ?>
+    </div>
+
+    <form method="post" class="card"><?= csrf_field('b24_map_save') ?>
+      <h2>Поля бота → поля лида</h2>
+      <p class="hint">Для каждого поля, которое собирает бот, выберите существующее поле лида. «В комментарий» — текстом в блок бота в «Комментарии» лида (заметки менеджеров не затираются). Списки Битрикса заполняются по совпадению текста; да/нет — галочкой; числа — числом.
+        <?= $fields ? '' : '<br><b>Сначала загрузите поля лида с портала.</b>' ?> <span style="background:#fff8e6;padding:0 4px">Подсвечено</span> — подобрано автоматически по названию, проверьте.</p>
+      <table class="kv">
+        <?php foreach ($groups as $g => $items): ?>
+          <tr><td colspan="2" style="padding-top:14px;font-family:inherit;font-size:14px;color:#1d2330"><b><?= h($g) ?></b></td></tr>
+          <?php foreach ($items as $n => $label):
+            if (isset(BOT_FIELDS_FIXED[$n])): ?>
+              <tr><td><?= h($label) ?><br><code><?= h($n) ?></code></td><td class="muted"><?= h(BOT_FIELDS_FIXED[$n]) ?></td></tr>
+            <?php continue; endif;
+            $cur = bot_field_target($sc, $n);
+            $sug = '';
+            if (!array_key_exists($n, $map) && $cur === '' && $fields) { $sug = bot_field_suggest($n, $fields, $taken); if ($sug !== '') $cur = $sug; }
+            if ($cur !== '' && $cur !== '-') $taken[] = $cur;
+          ?>
+            <tr<?= $sug ? ' style="background:#fff8e6"' : '' ?>><td><?= h($label) ?><br><code><?= h($n) ?></code></td>
+              <td><select name="map[<?= h($n) ?>]" style="margin:0"><?= $opt($cur) ?></select></td></tr>
+          <?php endforeach; ?>
+        <?php endforeach; ?>
+      </table>
+      <button>Сохранить сопоставление</button>
+    </form>
+
     <form method="post" class="card"><?= csrf_field('b24_reference') ?>
       <h2>Справочник Битрикс24</h2>
       <p class="hint">Покажет права вебхука, стадии лидов и воронки/стадии смарт-процесса <?= $smart ?: '?' ?> — чтобы вписать коды в сценарий (settings.hr). Ничего не меняет.</p>
