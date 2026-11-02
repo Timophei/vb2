@@ -237,7 +237,7 @@ b24_fields('deal', true);
 set_setting('b24_map_deal', jenc(['@product' => 'UF_CRM_SVC', 'visa.country' => 'UF_CRM_COUNTRY', 'visa.submission_city' => 'UF_CRM_CITY', 'payment.amount' => 'OPPORTUNITY']));
 set_setting('b24_defaults_deal', jenc(['UF_CRM_REQ' => 'бот']));
 set_setting('b24_flow', jenc([
-    'green_card' => ['entity' => 'deal', 'category' => 3, 'stage_new' => 'C3:NEW', 'service' => '12', 'assigned' => 15, 'stages' => ['payment_wait' => 'C3:PREPAYMENT_INVOICE']],
+    'green_card' => ['entity' => 'deal', 'category' => 3, 'stage_new' => 'C3:NEW', 'service' => '12', 'assigned' => 15, 'stages' => ['payment_wait' => 'C3:PREPAYMENT_INVOICE', 'paid' => 'C3:WON', 'handed_to_manager' => 'C3:PREPARATION']],
     'visa' => ['entity' => 'deal', 'category' => 3, 'stage_new' => 'C3:NEW', 'service' => '11'],
 ]));
 $gaps = b24_required_gaps(scenario_active(), 'deal');
@@ -273,6 +273,10 @@ $last = end($upd)[1]['fields'] ?? [];
 check(($last['STAGE_ID'] ?? '') === 'C3:PREPAYMENT_INVOICE', 'ожидание оплаты → стадия «Заключение договора и оплата»');
 check(($last['OPPORTUNITY'] ?? 0) == 3000 && ($last['CURRENCY_ID'] ?? '') === 'RUB', 'сумма сделки = сумма счёта');
 check(!in_array('crm.contact.add', array_column($GLOBALS['B24'], 0), true), 'контакт повторно не создаётся');
+$GLOBALS['B24'] = [];
+payment_mark((string)dialog_load($dlg)['slots']['payment.invoice_id'], true);
+$st = array_values(array_filter(array_map(fn($x) => $x[1]['fields']['STAGE_ID'] ?? null, array_filter($GLOBALS['B24'], fn($x) => $x[0] === 'crm.deal.update'))));
+check(state($dlg) === 'handed_to_manager' && $st === ['C3:WON'], 'оплата → сделка успешна (WON); «передано менеджеру» стадию закрытой сделки не меняет');
 
 echo "\n2д. Виза с сайта: без контакта сделки нет; телефон → найден существующий контакт; страны нет в списке → «Другая»\n";
 $GLOBALS['CLS'] = [

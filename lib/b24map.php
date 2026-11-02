@@ -170,7 +170,8 @@ function b24_deal_pipelines(bool $refresh = false): array
         $stages = [];
         try {
             foreach ((array)(b24('crm.status.list', ['filter' => ['ENTITY_ID' => $ent], 'order' => ['SORT' => 'ASC']])['result'] ?? []) as $s) {
-                $stages[(string)$s['STATUS_ID']] = (string)$s['NAME'];
+                $sem = (string)($s['EXTRA']['SEMANTICS'] ?? '');
+                $stages[(string)$s['STATUS_ID']] = (string)$s['NAME'] . ($sem === 'S' ? ' (успех)' : ($sem === 'F' ? ' (провал)' : ''));
             }
         } catch (Throwable $e) { /* пусто */ }
         $out[(string)$c['id']] = ['name' => $c['name'], 'stages' => $stages];

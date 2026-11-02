@@ -32,6 +32,18 @@ function crm_title_prefix(array $T): string
 function b24_deal_url(int $id): string { return b24_portal() . '/crm/deal/details/' . $id . '/'; }
 function b24_contact_url(int $id): string { return b24_portal() . '/crm/contact/details/' . $id . '/'; }
 
+/** Финальная стадия (успех / провал): после неё бот стадию сделки больше не трогает. */
+function crm_stage_final(string $stage): bool
+{
+    if ($stage === '') return false;
+    if (preg_match('/(^|:)(WON|LOSE|APOLOGY)$/', $stage)) return true;
+    foreach (b24_deal_pipelines() as $p) {
+        $name = $p['stages'][$stage] ?? null;
+        if ($name !== null) return str_ends_with($name, '(успех)') || str_ends_with($name, '(провал)');
+    }
+    return false;
+}
+
 /** Синхронизация сделки и контакта после хода. */
 function crm_sync(array &$T): void
 {
@@ -39,7 +51,14 @@ function crm_sync(array &$T): void
     $d = &$T['d'];
     $product = (string)$d['slots']['intent'];
     $flow = b24_flow($product);
-    $stage = (string)($flow['stages'][$d['state']] ?? '');
+    // стадия по этапам, пройденным за ход (оплачено → передано менеджеру: «успех» не перетирается)
+    $stage = '';
+    foreach (array_merge($T['visited'], [$d['state']]) as $st) {
+        $sid = (string)($flow['stages'][$st] ?? '');
+        if ($sid === '') continue;
+        $stage = $sid;
+        if (crm_stage_final($sid)) break;
+    }
     $c = get_client((int)$d['client_id']);
     $hasContact = $c['phone'] !== '' || $c['email'] !== '' || (int)$c['tg_id'] > 0 || $c['messenger_contact'] !== '';
     $important = in_array($d['state'], CRM_IMPORTANT_STATES, true) || $stage !== '';
@@ -72,7 +91,11 @@ function crm_sync(array &$T): void
             return;
         }
 
-        if ($stage !== '' && $stage !== ($d['counters']['deal_stage'] ?? '')) $fields['STAGE_ID'] = $stage;
+        $cur = (string)($d['counters']['deal_stage'] ?? '');
+        if ($stage !== '' && $stage !== $cur) {
+            if (crm_stage_final($cur)) action_log($T, 'b24_update_deal', ['стадия' => $stage], 'сделка уже закрыта (' . $cur . ') — стадию не меняем');
+            else $fields['STAGE_ID'] = $stage;
+        }
         if ($contactId > 0 && (int)($d['counters']['deal_contact'] ?? 0) !== $contactId) $fields['CONTACT_ID'] = $contactId;
         $current = '';
         if ((int)$d['deal_id'] > 0 && b24_live($d['channel'])) {
