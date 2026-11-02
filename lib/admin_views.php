@@ -340,7 +340,7 @@ function catalog_from_post(array $p): array
     $paramsArr = $params === '' ? [] : json_decode($params, true);
     if (!is_array($paramsArr)) throw new RuntimeException('Параметры — должен быть JSON-объект (или пусто): ' . json_last_error_msg());
     return [
-        'id' => trim((string)$p['id']),
+        'id' => str_replace('-', '_', strtolower(trim((string)$p['id']))),
         'name' => trim((string)$p['name']) ?: trim((string)$p['id']),
         'section' => (string)$p['section'],
         'active' => !empty($p['active']),
@@ -382,7 +382,7 @@ function view_catalog(): void
       <?= csrf_field('catalog_save', ['orig_id' => $p['id']]) ?>
       <h2><?= $p['id'] === '' ? 'Новый товар' : h($p['name'] ?? $p['id']) ?></h2>
       <div class="grid">
-        <label>Код (латиница)<input name="id" value="<?= h($p['id']) ?>" required pattern="[a-z0-9_]{2,40}"></label>
+        <label>Код (латиница)<input name="id" value="<?= h($p['id']) ?>" required pattern="[A-Za-z0-9_\-]{2,40}" title="Латиница, цифры, _ (2–40 символов). Заглавные станут строчными." oninput="this.value=this.value.toLowerCase().replace(/-/g,'_')"></label>
         <label>Название<input name="name" value="<?= h($p['name'] ?? '') ?>"></label>
         <label>Раздел<input name="section" value="<?= h($p['section']) ?>" placeholder="cards / green_card / visa"></label>
         <label>Валюта<select name="currency"><?php foreach (['RUB', 'USD', 'EUR'] as $cur): ?><option <?= ($p['currency'] ?? 'RUB') === $cur ? 'selected' : '' ?>><?= $cur ?></option><?php endforeach; ?></select></label>
