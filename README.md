@@ -22,6 +22,8 @@ PHP 8.3 + SQLite + OpenAI. Вторая версия визового бота: 
 
 **Сумму счёта считает код** по каталогу: (цена варианта + опции) × участники. Пустая цена — бот говорит «уточнит менеджер» и счёт не выставляет.
 
+**Счёт в тестовом режиме:** у счёта порядковый номер (№ 0001…), бот присылает QR-код (qrencode) со ссылкой на демо-страницу оплаты. Сканируете телефоном → «Оплатить (демо)» или «Ошибка оплаты» → бот сам продолжает диалог.
+
 ## Структура
 
 ```
@@ -51,7 +53,7 @@ vb2/
 
 ```bash
 # 1. Пакеты (если ещё нет после v1)
-sudo apt install -y git poppler-utils php8.3-sqlite3 php8.3-curl php8.3-mbstring php8.3-zip php8.3-xml
+sudo apt install -y git poppler-utils qrencode fonts-dejavu-core php8.3-sqlite3 php8.3-curl php8.3-mbstring php8.3-zip php8.3-xml php8.3-gd
 
 # 2. Код
 sudo git clone https://github.com/Timophei/vb2.git /var/www/vb2

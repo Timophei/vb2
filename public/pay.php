@@ -47,9 +47,10 @@ $color = (string)cfg('accent_color', '#1f4e8c');
 <?php if (!$p): ?>
   <h1>Счёт не найден</h1><p>Проверьте ссылку или вернитесь в чат и попросите выставить счёт заново.</p>
 <?php else: ?>
-  <h1>Оплата заказа</h1>
+  <h1>Счёт № <?= $h(invoice_no((int)$p['id'])) ?></h1>
   <div><?= $h($p['description']) ?></div>
   <div class="sum"><?= $h(money_fmt((float)$p['amount'], $p['currency'])) ?></div>
+  <?php if ($p['status'] === 'pending' && payment_qr($code, invoice_no((int)$p['id']), (bool)$p['demo'])): ?><img src="qr.php?c=<?= $h($code) ?>" alt="QR-код" style="display:block;width:200px;margin:4px 0 14px;border:1px solid #e2e7ef;border-radius:10px"><?php endif; ?>
   <span class="st <?= $h($p['status']) ?>"><?= ['pending' => 'ожидает оплаты', 'paid' => 'оплачено', 'failed' => 'оплата не прошла'][$p['status']] ?? $h($p['status']) ?></span>
   <?php if ($p['demo']): ?>
     <div class="demo"><b>Тестовый режим.</b> Это демонстрационный счёт: деньги не списываются. Кнопки ниже имитируют результат оплаты.</div>

@@ -90,6 +90,7 @@
     '.inner{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:10px}' +
     '.m{max-width:85%;padding:10px 14px;border-radius:14px;word-wrap:break-word;overflow-wrap:anywhere}' +
     '.m ul{margin:4px 0;padding-left:20px}.m li{margin:2px 0}.m a{color:inherit}' +
+    '.m img.qr{display:block;width:220px;max-width:100%;height:auto;margin:0 0 8px;border-radius:8px;border:1px solid #e2e7ef;background:#fff}' +
     '.assistant{background:#fff;border:1px solid #e2e7ef;align-self:flex-start;border-bottom-left-radius:4px}' +
     '.user{background:var(--c);color:#fff;align-self:flex-end;border-bottom-right-radius:4px;white-space:pre-wrap}' +
     '.err{background:#fdecec;color:#a32020;align-self:center;font-size:14px}' +
@@ -126,10 +127,11 @@
   var started = false, busy = false;
 
   function scroll() { log.scrollTop = log.scrollHeight; }
-  function add(text, role) {
+  function add(text, role, image) {
     var d = document.createElement('div');
     d.className = 'm ' + role;
-    if (role === 'user') d.textContent = text; else d.innerHTML = render(text);
+    if (role === 'user') d.textContent = text; else d.innerHTML = (image ? '<img class="qr" alt="QR-код для оплаты" src="' + esc(image) + '">' : '') + render(text);
+    if (image) d.querySelector('img').onload = scroll;
     inner.appendChild(d); scroll(); return d;
   }
   function chips() {
@@ -144,13 +146,13 @@
   function showMessages(list) {
     inner.innerHTML = '';
     lastId = 0;
-    list.forEach(function (m) { add(m.text, m.role); if (m.id > lastId) lastId = m.id; });
+    list.forEach(function (m) { add(m.text, m.role, m.image); if (m.id > lastId) lastId = m.id; });
     if (list.length === 1 && list[0].role === 'assistant' && suggestions.length) chips();
   }
   function appendNew(list) {
     (list || []).forEach(function (m) {
       if (m.id && m.id <= lastId) return;
-      add(m.text, m.role); if (m.id > lastId) lastId = m.id;
+      add(m.text, m.role, m.image); if (m.id > lastId) lastId = m.id;
     });
   }
   // новые сообщения бота без запроса клиента (напоминания, ответ после оплаты)

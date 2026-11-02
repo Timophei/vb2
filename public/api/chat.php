@@ -48,8 +48,11 @@ function msgs_out(array $rows): array
     foreach ($rows as $m) {
         if (!in_array($m['role'], ['user', 'assistant', 'operator'], true)) continue;
         $text = $m['content'];
-        if ($m['attachment']) { $a = jdec($m['attachment']); $text = ($text !== '(файл)' ? $text . "\n" : '') . '📎 ' . ($a['name'] ?? 'файл'); }
-        $out[] = ['id' => (int)$m['id'], 'role' => $m['role'] === 'operator' ? 'assistant' : $m['role'], 'text' => $text];
+        $a = $m['attachment'] ? jdec($m['attachment']) : null;
+        $row = ['id' => (int)$m['id'], 'role' => $m['role'] === 'operator' ? 'assistant' : $m['role']];
+        if ($a && ($a['kind'] ?? '') === 'qr') $row['image'] = public_url('qr.php?c=' . $a['code']);
+        elseif ($a) $text = ($text !== '(файл)' ? $text . "\n" : '') . '📎 ' . ($a['name'] ?? 'файл');
+        $out[] = $row + ['text' => $text];
     }
     return $out;
 }

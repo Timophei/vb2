@@ -66,12 +66,21 @@ try {
     if ($text === '' && !$att) { tg_send($chatId, 'Пока я понимаю текст и файлы. Напишите, пожалуйста, ваш вопрос.'); exit; }
 
     tg_api('sendChatAction', ['chat_id' => $chatId, 'action' => 'typing']);
-    $replies = engine_message($dialog, $text, $att);
+    $before = (int)db()->query('SELECT COALESCE(MAX(id), 0) FROM messages WHERE dialog_id = ' . (int)$dialog)->fetchColumn();
+    engine_message($dialog, $text, $att);
 
+    // всё, что бот написал за ход: текст и картинки (QR-код счёта)
     $client = get_client($cid);
-    foreach ($replies as $i => $r) {
-        $askPhone = $i === count($replies) - 1 && $client['phone'] === '' && preg_match('/телефон|номер для связи/ui', $r);
-        tg_send($chatId, $r, $askPhone ? $phoneKeyboard : null);
+    $out = array_values(array_filter(dialog_messages($dialog, 20, $before), fn($m) => $m['role'] === 'assistant'));
+    foreach ($out as $i => $m) {
+        $a = $m['attachment'] ? jdec($m['attachment']) : null;
+        if ($a && ($a['kind'] ?? '') === 'qr') {
+            $r = tg_api('sendPhoto', ['chat_id' => $chatId, 'photo' => public_url('qr.php?c=' . $a['code']), 'caption' => mb_substr($m['content'], 0, 1000)]);
+            if (!($r['ok'] ?? false)) tg_send($chatId, $m['content']); // не дотянулся до картинки — хотя бы ссылка
+            continue;
+        }
+        $askPhone = $i === count($out) - 1 && $client['phone'] === '' && preg_match('/телефон|номер для связи/ui', $m['content']);
+        tg_send($chatId, $m['content'], $askPhone ? $phoneKeyboard : null);
     }
 } catch (Throwable $e) {
     app_log('tg: ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());

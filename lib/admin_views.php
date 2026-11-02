@@ -88,7 +88,7 @@ function view_dialog_card(int $id, bool $sandbox): void
               <div class="msg system">— <?= h(sc_state_title($sc, $m['state'])) ?> —</div>
             <?php endif; ?>
             <div class="msg <?= h($m['role']) ?>"><small><?= h(ROLE_NAMES[$m['role']] ?? $m['role']) ?> · <?= h(fmt_dt($m['created_at'], 'd.m H:i:s')) ?></small>
-              <div class="body"><?= h($m['content']) ?><?php if ($a): ?>
+              <div class="body"><?php if ($a && ($a['kind'] ?? '') === 'qr'): ?><img src="../qr.php?c=<?= h($a['code']) ?>" alt="QR" style="width:160px;display:block;margin-bottom:6px;border-radius:6px"><?php endif; ?><?= h($m['content']) ?><?php if ($a && ($a['kind'] ?? '') !== 'qr'): ?>
                 <br>📎 <?= h($a['name'] ?? 'файл') ?><?php endif; ?></div></div>
           <?php endforeach; ?>
           <span id="end"></span>

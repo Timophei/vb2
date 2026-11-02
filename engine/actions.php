@@ -264,17 +264,71 @@ function tool_create_payment_link(array &$T, array $args, array $state): array
     $code = bin2hex(random_bytes(8));
     db()->prepare('INSERT INTO payments(code, dialog_id, product_id, variant_id, options, quantity, amount, currency, description, demo) VALUES(?,?,?,?,?,?,?,?,?,?)')
         ->execute([$code, $T['d']['id'], $args['product_id'], (string)($args['variant_id'] ?? ''), jenc(array_values((array)($args['options'] ?? []))), max(1, (int)($args['quantity'] ?? 1)), $price['amount'], $price['currency'], $price['description'], $demo ? 1 : 0]);
+    $no = invoice_no((int)db()->lastInsertId());
     slot_set($T, 'payment.invoice_id', $code);
+    slot_set($T, 'payment.invoice_no', $no);
     slot_set($T, 'payment.amount', $price['amount']);
     slot_set($T, 'payment.status', 'pending');
     $T['events'][] = 'invoice_sent';
+    // QR-код отправляется отдельным сообщением сразу после ответа бота
+    $qr = payment_qr($code, $no, $demo);
+    if ($qr) $T['attach'][] = [
+        'text' => "Счёт № {$no} · " . money_fmt($price['amount'], $price['currency']) . ($demo ? ' · тестовый' : '') . "\nОтсканируйте QR-код или откройте ссылку: " . pay_url($code),
+        'att' => ['kind' => 'qr', 'code' => $code, 'file' => $qr, 'name' => "QR счёт № {$no}.png"],
+    ];
     return [
+        'invoice_no' => $no,
         'url' => pay_url($code),
         'amount' => money_fmt($price['amount'], $price['currency']),
         'description' => $price['description'],
         'demo' => $demo,
-        'note' => $demo ? 'Тестовый режим: ссылка демонстрационная, деньги не списываются — сообщи это клиенту.' : '',
+        'qr' => $qr ? 'QR-код со ссылкой на оплату система отправит клиенту отдельным сообщением сразу после твоего ответа — сошлись на него («ниже QR-код»), назови номер счёта и сумму.' : '',
+        'note' => $demo ? 'Тестовый режим: счёт демонстрационный, деньги не списываются — сообщи это клиенту.' : '',
     ];
+}
+
+function invoice_no(int $id): string { return str_pad((string)$id, 4, '0', STR_PAD_LEFT); }
+
+/**
+ * PNG с QR-кодом ссылки на оплату (+ подпись «Счёт № … · ТЕСТ»). Нужен qrencode (apt install qrencode).
+ * Возвращает путь относительно data/ или null, если qrencode не установлен.
+ */
+function payment_qr(string $code, string $no, bool $demo): ?string
+{
+    $rel = 'qr/' . $code . '.png';
+    $path = data_dir() . '/' . $rel;
+    if (is_file($path)) return $rel;
+    $bin = trim((string)@shell_exec('command -v qrencode 2>/dev/null'));
+    if ($bin === '') { app_log('qrencode не установлен — QR-код не создан (sudo apt install qrencode)'); return null; }
+    if (!is_dir(dirname($path))) mkdir(dirname($path), 0770, true);
+    exec(escapeshellarg($bin) . ' -t PNG -s 8 -m 3 -l M -o ' . escapeshellarg($path) . ' ' . escapeshellarg(pay_url($code)) . ' 2>&1', $o, $rc);
+    if ($rc !== 0 || !is_file($path)) { app_log('qrencode: ' . implode(' ', $o)); return null; }
+    if (function_exists('imagecreatefrompng')) {
+        // подпись под кодом: номер счёта и пометка «тест»
+        $src = @imagecreatefrompng($path);
+        if ($src) {
+            $w = imagesx($src); $h = imagesy($src); $band = 56;
+            $img = imagecreatetruecolor($w, $h + $band);
+            $white = imagecolorallocate($img, 255, 255, 255);
+            $black = imagecolorallocate($img, 20, 25, 35);
+            $red = imagecolorallocate($img, 190, 30, 30);
+            imagefill($img, 0, 0, $white);
+            imagecopy($img, $src, 0, 0, 0, 0, $w, $h);
+            $font = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
+            $label = 'Счёт № ' . $no;
+            if (is_file($font) && function_exists('imagettftext')) {
+                $box = imagettfbbox(18, 0, $font, $label);
+                imagettftext($img, 18, 0, (int)(($w - ($box[2] - $box[0])) / 2), $h + 22, $black, $font, $label);
+                if ($demo) { $t = 'ТЕСТ · деньги не списываются'; $box = imagettfbbox(11, 0, $font, $t); imagettftext($img, 11, 0, (int)(($w - ($box[2] - $box[0])) / 2), $h + 44, $red, $font, $t); }
+            } else {
+                $t = 'INVOICE No ' . $no . ($demo ? ' - DEMO' : '');
+                imagestring($img, 5, (int)(($w - strlen($t) * 9) / 2), $h + 18, $t, $black);
+            }
+            imagepng($img, $path);
+            imagedestroy($img); imagedestroy($src);
+        }
+    }
+    return $rel;
 }
 
 function pay_url(string $code): string { return public_url('pay.php?c=' . $code); }

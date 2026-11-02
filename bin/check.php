@@ -38,5 +38,6 @@ if (b24_configured()) {
     } catch (Throwable $e) { $bad('Битрикс24: ' . $e->getMessage()); }
 } else echo "  · Битрикс24: вебхук не задан\n";
 
+trim((string)shell_exec('command -v qrencode')) !== '' ? $ok('qrencode: QR-коды счетов') : $bad('qrencode не установлен — счёт уйдёт без QR-кода: sudo apt install -y qrencode');
 $hb = @filemtime(data_dir() . '/worker.heartbeat');
 $hb && time() - $hb < 90 ? $ok('воркер таймеров работает') : $bad('воркер таймеров не запущен: sudo systemctl enable --now vb2-worker');

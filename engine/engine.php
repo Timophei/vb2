@@ -492,6 +492,9 @@ function engine_finish(array &$T, bool $needReply, string $userText, string $eve
     }
 
     foreach ($out as $text) save_message((int)$T['d']['id'], 'assistant', $text, null, $T['d']['state']);
+    // вложения от инструментов (QR-код счёта) — отдельными сообщениями после ответа
+    foreach ($T['attach'] ?? [] as $a) save_message((int)$T['d']['id'], 'assistant', $a['text'], $a['att'], $T['d']['state']);
+    $T['attach'] = [];
     if ($out) timers_start_state($T['d'], $T['sc'], $T['d']['state'], 'bot_answered_question');
     timers_sync_slots($T['d'], $T['sc']);
     dialog_save($T['d']);

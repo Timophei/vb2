@@ -156,6 +156,12 @@ check(state($dlg) === 'payment_wait', 'счёт выставлен → payment_w
 $d = dialog_load($dlg);
 check(($d['slots']['payment.amount'] ?? 0) == 6000, 'сумма посчитана кодом: 3000 × 2 = 6000');
 check(str_contains($out[0] ?? '', 'pay.php?c='), 'ссылка на оплату в ответе');
+$qrMsg = array_values(array_filter(dialog_messages($dlg), fn($m) => $m['attachment'] && (jdec($m['attachment'])['kind'] ?? '') === 'qr'));
+if (trim((string)shell_exec('command -v qrencode')) !== '') {
+    check(count($qrMsg) === 1 && str_contains($qrMsg[0]['content'], 'Счёт № 0001'), 'QR-код счёта отдельным сообщением, порядковый номер 0001');
+    check(is_file(data_dir() . '/' . jdec($qrMsg[0]['attachment'])['file']), 'картинка QR создана');
+    check(($d['slots']['payment.invoice_no'] ?? '') === '0001', 'номер счёта в слоте');
+} else echo "  · qrencode не установлен — проверка QR пропущена\n";
 $t = db()->query("SELECT timer_id FROM timers WHERE dialog_id = $dlg AND active = 1 ORDER BY timer_id")->fetchAll(PDO::FETCH_COLUMN);
 check($t === ['payment_reminder', 'payment_timeout'], 'запущены таймеры ожидания оплаты');
 $GLOBALS['TG'] = [];
