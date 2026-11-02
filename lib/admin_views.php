@@ -83,6 +83,8 @@ function view_dialog_card(int $id, bool $sandbox): void
             <?php if ((int)$d['lead_id'] > 0): ?> · <a href="<?= h(b24_lead_url((int)$d['lead_id'])) ?>" target="_blank">лид #<?= (int)$d['lead_id'] ?> в Б24</a><?php endif; ?>
             <?php if ((int)$d['deal_id'] > 0): ?> · <a href="<?= h(b24_deal_url((int)$d['deal_id'])) ?>" target="_blank">сделка #<?= (int)$d['deal_id'] ?></a><?php endif; ?>
             <?php if ((int)$d['contact_id'] > 0): ?> · <a href="<?= h(b24_contact_url((int)$d['contact_id'])) ?>" target="_blank">контакт #<?= (int)$d['contact_id'] ?></a><?php endif; ?></p>
+          <?php if (dialog_taken($d)): ?><div class="warn">Клиента ведёт менеджер (Битрикс24, сотрудник #<?= dialog_taken($d) ?>): бот молчит, сообщения клиента уходят в ленту сделки.
+            <form method="post" class="inline-btn"><?= csrf_field('dlg_return', ['dialog' => $id, 'back' => $back]) ?><button class="sec">Вернуть боту</button></form></div><?php endif; ?>
         <?php endif; ?>
         <div class="chatbox"><div class="chatlog">
           <?php $prevState = null; foreach ($msgs as $m): $a = $m['attachment'] ? jdec($m['attachment']) : null; ?>
@@ -576,6 +578,12 @@ function view_bitrix(array $view): void
       <p class="hint"><?= b24_configured() ? 'Портал: ' . h(b24_portal()) . ' · режим <b>' . h(cfg('bitrix_mode', 'dry')) . '</b>' . (cfg('bitrix_mode') !== 'live' ? ' — в CRM ничего не пишется, в журнале диалога видно, что ушло бы' : ' — пишется по-настоящему') : '<b class="bad">вебхук не задан в config.php</b>' ?></p>
       <form method="post" class="inline-btn" style="display:inline"><?= csrf_field('b24_fields_load') ?><button <?= b24_configured() ? '' : 'disabled' ?>><?= $loaded ? 'Обновить с портала' : 'Загрузить с портала' ?></button></form>
       <span class="hint"> поля лида, сделки, контакта и воронки сделок<?= $at ? ' · загружено ' . h(fmt_dt($at)) : '' ?></span>
+      <form method="post" class="row-form" style="margin-top:14px"><?= csrf_field('b24_bot_user') ?>
+        <label>Сотрудник «Бот» в Битрикс24 — ID<input name="bot_user" value="<?= b24_bot_user() ?: '' ?>" placeholder="напр. 25" style="width:110px"></label>
+        <button>Сохранить</button>
+      </form>
+      <p class="hint" style="margin-top:8px">Бот ставится ответственным за лиды, сделки, контакты и элементы HR, которые создаёт. Пока ответственный — бот, бот ведёт клиента. Менеджер сменил ответственного на себя — бот замолкает (проверка раз в минуту), а сообщения клиента падают в ленту сделки. Вернули ответственным бота — бот продолжает. ID — число в адресе профиля сотрудника: <code>/company/personal/user/<b>25</b>/</code>.
+        <?= b24_bot_user() ? '' : '<b class="bad">Не задан — ответственным станет владелец вебхука, и «забрал / вернул» работать не будет.</b>' ?></p>
     </div>
 
     <form method="post" class="card"><?= csrf_field('b24_flow_save') ?>
@@ -591,7 +599,7 @@ function view_bitrix(array $view): void
             <label>Стадия при создании<select name="flow[<?= $prod ?>][stage_new]"><?= $stageOpts((string)($f['stage_new'] ?? ''), '— первая стадия воронки —') ?></select></label>
             <label>«Услуга» в сделке<?php if ($svcItems): ?><select name="flow[<?= $prod ?>][service]"><option value="">— по названию направления —</option><?php foreach ($svcItems as $id => $lbl): ?><option value="<?= h($id) ?>" <?= (string)($f['service'] ?? '') === (string)$id ? 'selected' : '' ?>><?= h($lbl) ?></option><?php endforeach; ?></select>
               <?php else: ?><input name="flow[<?= $prod ?>][service]" value="<?= h($f['service'] ?? '') ?>" placeholder="сопоставьте «Продукт» с полем сделки ниже"><?php endif; ?></label>
-            <label>Ответственный (ID сотрудника)<input name="flow[<?= $prod ?>][assigned]" value="<?= (int)($f['assigned'] ?? 0) ?: '' ?>" placeholder="пусто — владелец вебхука"></label>
+            <label>Ответственный при создании (ID)<input name="flow[<?= $prod ?>][assigned]" value="<?= (int)($f['assigned'] ?? 0) ?: '' ?>" placeholder="пусто — бот"></label>
           </div>
           <p class="hint" style="margin:4px 0">Стадия сделки по этапам бота (пусто — не менять):</p>
           <table class="kv">

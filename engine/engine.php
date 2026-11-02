@@ -405,6 +405,12 @@ function engine_message(int $dialogId, string $text, ?array $attachment = null):
     $msgId = save_message($dialogId, 'user', $text !== '' ? $text : '(файл)', $attachment, $d['state']);
     $T = turn_init($d, $msgId);
 
+    // клиента забрал менеджер (сменил ответственного в Битриксе) — бот молчит, сообщение уходит в ленту сделки
+    if (dialog_taken($T['d'])) {
+        crm_forward_to_manager($T, $text, $attachment);
+        dialog_save($T['d']);
+        return [];
+    }
     // бот на паузе (рядом работает оператор) — только слушаем
     if ($T['d']['paused_until'] && $T['d']['paused_until'] > now_utc()) {
         dialog_save($T['d']);

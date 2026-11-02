@@ -74,6 +74,7 @@ function lead_ensure(array &$T): int
         'SOURCE_DESCRIPTION' => 'бот vb2, ' . (CHANNEL_NAMES[$T['d']['channel']] ?? $T['d']['channel']) . ', диалог #' . $T['d']['id'],
         'OPENED' => 'Y',
     ] + b24_client_fields($c);
+    if (crm_assignee() > 0) $fields['ASSIGNED_BY_ID'] = crm_assignee();
     foreach (b24_defaults('lead') as $code => $val) if ($val !== '') $fields[$code] ??= $val;
     $res = b24_call($T, 'b24_create_lead', 'crm.lead.add', ['fields' => array_filter($fields, fn($v) => $v !== '')]);
     if ($res === null) return 0; // тестовый режим
@@ -183,6 +184,7 @@ function act_b24_create_smart_item(array &$T, array $a): void
         if ($val === null || $val === '') continue;
         $fields[$k] = $val;
     }
+    if (empty($fields['assignedById']) && crm_assignee() > 0) $fields['assignedById'] = crm_assignee();
     $type = (int)($fields['entityTypeId'] ?? 0);
     unset($fields['entityTypeId']);
     if ($type <= 0) throw new RuntimeException('не задан entityTypeId смарт-процесса');

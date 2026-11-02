@@ -19,6 +19,11 @@ do {
     try {
         $n = timers_run_due();
         if ($n) echo date('H:i:s') . " таймеров: $n\n";
+        if (time() - ($lastWatch ?? 0) >= 60) { // раз в минуту: не забрал ли менеджер клиента в Битриксе
+            $lastWatch = time();
+            $w = crm_watch_takeover();
+            if ($w) echo date('H:i:s') . " смена ответственного: $w\n";
+        }
     } catch (Throwable $e) {
         fwrite(STDERR, date('H:i:s') . ' ' . $e->getMessage() . "\n");
         app_log('worker: ' . $e->getMessage());

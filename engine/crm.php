@@ -64,7 +64,7 @@ function crm_sync(array &$T): void
             $st = $stage !== '' ? $stage : (string)($flow['stage_new'] ?? '');
             if ($st !== '') $fields['STAGE_ID'] = $st;
             if ($contactId > 0) $fields['CONTACT_ID'] = $contactId;
-            if ((int)($flow['assigned'] ?? 0) > 0) $fields['ASSIGNED_BY_ID'] = (int)$flow['assigned'];
+            if (crm_assignee($flow) > 0) $fields['ASSIGNED_BY_ID'] = crm_assignee($flow);
             $res = b24_call($T, 'b24_create_deal', 'crm.deal.add', ['fields' => $fields]);
             if ($res) $d['deal_id'] = (int)$res['result'];
             else $d['counters']['dry:deal'] = 1;
@@ -127,7 +127,7 @@ function crm_contact_ensure(array &$T, array $c, array $flow): int
     }
     $fields = $client + $mapped + ['OPENED' => 'Y', 'SOURCE_DESCRIPTION' => 'бот vb2, ' . (CHANNEL_NAMES[$d['channel']] ?? $d['channel'])];
     if (empty($fields['NAME']) && empty($fields['LAST_NAME'])) $fields['NAME'] = 'Клиент ' . (CHANNEL_NAMES[$d['channel']] ?? '') . ' #' . $d['client_id'];
-    if ((int)($flow['assigned'] ?? 0) > 0) $fields['ASSIGNED_BY_ID'] = (int)$flow['assigned'];
+    if (crm_assignee($flow) > 0) $fields['ASSIGNED_BY_ID'] = crm_assignee($flow);
     $res = b24_call($T, 'b24_create_contact', 'crm.contact.add', ['fields' => $fields] + ($live ? [] : ['поиск' => 'сначала ищем по телефону/e-mail среди существующих']));
     foreach (['NAME', 'LAST_NAME', 'SECOND_NAME'] as $k) if (isset($client[$k])) $d['counters']['c_' . $k] = $client[$k];
     foreach (['PHONE', 'EMAIL', 'IM'] as $k) if (isset($client[$k])) $d['counters']['c_' . $k] = $client[$k][0]['VALUE'];
@@ -135,4 +135,76 @@ function crm_contact_ensure(array &$T, array $c, array $flow): int
     if (!$res) { $d['counters']['dry:contact'] = 1; return 0; }
     $d['contact_id'] = (int)$res['result'];
     return (int)$d['contact_id'];
+}
+
+/* ------------------------------------------------------------------ */
+/*  Ответственный: бот → менеджер                                      */
+/* ------------------------------------------------------------------ */
+
+/** ID сотрудника «Бот» в Битрикс24 (ответственный, пока клиента ведёт бот). 0 — не задан. */
+function b24_bot_user(): int { return (int)setting('b24_bot_user'); }
+
+/** Кого ставить ответственным при создании: явный по направлению, иначе бот. */
+function crm_assignee(array $flow = []): int
+{
+    return (int)($flow['assigned'] ?? 0) ?: b24_bot_user();
+}
+
+function dialog_taken(array $d): int { return (int)($d['counters']['taken_by'] ?? 0); }
+
+/**
+ * Проверка «менеджер забрал»: у сделок/лидов активных диалогов сравниваем ответственного с ботом.
+ * Сменили на менеджера — бот замолкает (событие manager_took_over); вернули боту — бот продолжает.
+ * Запускается воркером раз в минуту, только в режиме live.
+ */
+function crm_watch_takeover(): int
+{
+    $bot = b24_bot_user();
+    if ($bot <= 0 || !b24_configured() || cfg('bitrix_mode', 'dry') !== 'live') return 0;
+    $rows = db()->query("SELECT id, deal_id, lead_id, channel FROM dialogs WHERE (deal_id > 0 OR lead_id > 0) AND channel != 'sandbox' AND last_at > datetime('now', '-30 days')")->fetchAll();
+    if (!$rows) return 0;
+    $owners = [];
+    foreach (['deal' => 'deal_id', 'lead' => 'lead_id'] as $ent => $col) {
+        $ids = array_values(array_unique(array_filter(array_map(fn($r) => (int)$r[$col], $rows))));
+        foreach (array_chunk($ids, 50) as $chunk) {
+            $res = b24("crm.$ent.list", ['filter' => ['ID' => $chunk], 'select' => ['ID', 'ASSIGNED_BY_ID']])['result'] ?? [];
+            foreach ((array)$res as $r) $owners[$ent][(int)$r['ID']] = (int)$r['ASSIGNED_BY_ID'];
+        }
+    }
+    $n = 0;
+    foreach ($rows as $r) {
+        $owner = $r['deal_id'] > 0 ? ($owners['deal'][(int)$r['deal_id']] ?? 0) : ($owners['lead'][(int)$r['lead_id']] ?? 0);
+        if ($owner <= 0) continue;
+        $d = dialog_load((int)$r['id']);
+        $taken = dialog_taken($d);
+        if ($owner !== $bot && $taken !== $owner) {
+            $d['counters']['taken_by'] = $owner;
+            dialog_save($d);
+            db()->prepare("UPDATE timers SET active = 0, result = 'менеджер забрал клиента' WHERE dialog_id = ? AND active = 1")->execute([$d['id']]);
+            db()->prepare('INSERT INTO actions_log(dialog_id, action, params, result) VALUES(?,?,?,?)')->execute([$d['id'], 'manager_took_over', jenc(['ответственный' => $owner]), "менеджер #$owner стал ответственным — бот замолкает"]);
+            if (!$taken) engine_event((int)$d['id'], 'manager_took_over', false);
+            $n++;
+        } elseif ($owner === $bot && $taken) {
+            unset($d['counters']['taken_by']);
+            dialog_save($d);
+            db()->prepare('INSERT INTO actions_log(dialog_id, action, params, result) VALUES(?,?,?,?)')->execute([$d['id'], 'returned_to_bot', '', 'ответственным снова стал бот — бот продолжает вести клиента']);
+            $n++;
+        }
+    }
+    return $n;
+}
+
+/** Клиент написал, а его ведёт менеджер: сообщение — в ленту сделки/лида, чтобы менеджер увидел. */
+function crm_forward_to_manager(array &$T, string $text, ?array $att): void
+{
+    $d = $T['d'];
+    [$ent, $id] = (int)$d['deal_id'] > 0 ? ['deal', (int)$d['deal_id']] : ['lead', (int)$d['lead_id']];
+    if ($id <= 0) return;
+    $comment = "💬 Клиент написал в " . (CHANNEL_NAMES[$d['channel']] ?? $d['channel']) . ":\n" . ($text !== '' ? $text : '(файл ' . ($att['name'] ?? '') . ')')
+        . "\nОтветить: " . public_url('admin/?tab=dialogs&id=' . $d['id']);
+    try {
+        b24_call($T, 'b24_forward', 'crm.timeline.comment.add', ['fields' => ['ENTITY_ID' => $id, 'ENTITY_TYPE' => $ent, 'COMMENT' => $comment]]);
+    } catch (Throwable $e) {
+        action_log($T, 'b24_forward', [], 'ОШИБКА: ' . $e->getMessage(), false);
+    }
 }

@@ -79,6 +79,7 @@ function timer_fire(array $row): string
 {
     $d = dialog_load((int)$row['dialog_id']);
     if ($d['state'] !== $row['state']) return 'пропущен: диалог уже в другом состоянии';
+    if (dialog_taken($d)) return 'пропущен: клиента ведёт менеджер';
     $tm = jdec($row['spec']);
     $sc = scenario_for($d);
     $T = turn_init($d, 0);

@@ -51,6 +51,9 @@ function b24_mock(string $method, array $params): array
     return match ($method) {
         'crm.lead.add' => ['result' => 501],
         'crm.deal.add' => ['result' => 700],
+        'crm.deal.list' => ['result' => array_map(fn($id) => ['ID' => (string)$id, 'ASSIGNED_BY_ID' => (string)($GLOBALS['OWNER'][$id] ?? 5)], (array)($params['filter']['ID'] ?? []))],
+        'crm.lead.list' => ['result' => []],
+        'crm.timeline.comment.add' => ['result' => 1],
         'crm.contact.add' => ['result' => 901],
         'crm.deal.get' => ['result' => ['COMMENTS' => '']],
         'crm.duplicate.findbycomm' => ['result' => in_array('+79140000001', $params['values'] ?? [], true) ? ['CONTACT' => [900]] : []],
@@ -288,6 +291,24 @@ $deal = array_values(array_filter($GLOBALS['B24'], fn($x) => $x[0] === 'crm.deal
 check(!in_array('crm.contact.add', $m, true) && ($deal['CONTACT_ID'] ?? 0) === 900, 'найден существующий контакт по телефону — привязан');
 check(($deal['UF_CRM_COUNTRY'] ?? '') === '29' && str_contains($deal['COMMENTS'] ?? '', '«Вьетнам» нет в списке'), 'Вьетнама нет в списке → «Другая», исходное — в комментарий');
 check(($deal['UF_CRM_CITY'] ?? '') === '31' && ($deal['UF_CRM_SVC'] ?? null) === ['11'], 'город из списка, услуга «Визы»');
+
+echo "\n2е. Ответственный: бот → менеджер забрал → бот молчит → вернули боту\n";
+set_setting('b24_bot_user', '5');
+$GLOBALS['CLS'] = ['а сколько стоит?' => ['none', []], 'ещё вопрос' => ['none', []]];
+$GLOBALS['B24'] = [];
+$GLOBALS['OWNER'] = [700 => 5];
+check(crm_watch_takeover() === 0, 'ответственный бот — ничего не меняется');
+$GLOBALS['OWNER'] = [700 => 25];
+check(crm_watch_takeover() >= 1 && dialog_taken(dialog_load($dlg)) === 25, 'менеджер #25 забрал — диалог помечен');
+$GLOBALS['B24'] = [];
+$out = say($dlg, 'а сколько стоит?');
+$tl = array_values(array_filter($GLOBALS['B24'], fn($x) => $x[0] === 'crm.timeline.comment.add'));
+check($out === [] && $tl && ($tl[0][1]['fields']['ENTITY_TYPE'] ?? '') === 'deal', 'бот молчит, сообщение клиента — в ленту сделки');
+$GLOBALS['OWNER'] = [700 => 5];
+crm_watch_takeover();
+$out = say($dlg, 'ещё вопрос');
+check($out !== [] && !dialog_taken(dialog_load($dlg)), 'вернули боту — бот снова отвечает');
+set_setting('b24_bot_user', '0');
 set_setting('b24_flow', '{}'); set_setting('b24_map_deal', '{}'); set_setting('b24_defaults_deal', '{}');
 
 /* ---------- 3. Глобальные переходы, таймеры, отложено ---------- */

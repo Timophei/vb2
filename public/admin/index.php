@@ -275,6 +275,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 foreach ((array)($_POST['def'] ?? []) as $k => $v) if (preg_match('/^[A-Z0-9_]+$/', (string)$k) && trim((string)$v) !== '') $def[$k] = trim((string)$v);
                 set_setting('b24_defaults_' . $ent, jenc((object)$def));
                 go('tab=bitrix&ent=' . $ent, 'Сопоставление полей (' . B24_ENTITIES[$ent] . ') сохранено.');
+            case 'b24_bot_user':
+                set_setting('b24_bot_user', (string)max(0, (int)$_POST['bot_user']));
+                go('tab=bitrix', 'Сотрудник «Бот»: #' . (int)$_POST['bot_user'] . '.');
+            case 'dlg_return':
+                $d = dialog_load($dlgId);
+                $T = turn_init($d, 0);
+                if (b24_bot_user() > 0) {
+                    if ((int)$d['deal_id'] > 0) b24_call($T, 'b24_return', 'crm.deal.update', ['id' => (int)$d['deal_id'], 'fields' => ['ASSIGNED_BY_ID' => b24_bot_user()]]);
+                    elseif ((int)$d['lead_id'] > 0) b24_call($T, 'b24_return', 'crm.lead.update', ['id' => (int)$d['lead_id'], 'fields' => ['ASSIGNED_BY_ID' => b24_bot_user()]]);
+                }
+                unset($T['d']['counters']['taken_by']);
+                dialog_save($T['d']);
+                go($back, 'Клиент возвращён боту' . (b24_bot_user() ? ' (ответственный в Битриксе — бот)' : '') . '.');
             case 'b24_flow_save':
                 $flow = [];
                 foreach ((array)($_POST['flow'] ?? []) as $prod => $f) {
