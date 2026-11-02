@@ -198,7 +198,7 @@ say($dlg, 'подумаю, напишите завтра в 10');
 check(state($dlg) === 'postponed', 'cards → postponed');
 $tm = db()->query("SELECT timer_id FROM timers WHERE dialog_id = $dlg AND active = 1")->fetchAll(PDO::FETCH_COLUMN);
 check($tm === ['followup'], 'таймер followup поставлен на время из слота');
-timers_fast_forward($dlg, 60 * 30);
+timers_fast_forward($dlg, 60 * 48); // «завтра в 10» — до 34 ч в зависимости от времени запуска
 check(state($dlg) === 'cards', 'в назначенное время — напоминание и возврат в cards');
 $msgs = dialog_messages($dlg);
 check(str_contains(end($msgs)['content'], 'Вы просили напомнить'), 'текст напоминания из сценария');
