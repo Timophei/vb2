@@ -80,7 +80,9 @@ function view_dialog_card(int $id, bool $sandbox): void
           <p class="hint">Пишите как клиент. Ответ идёт по активному сценарию; в Битрикс24 <?= setting('b24_sandbox_live') === '1' && b24_live('sandbox') ? '<b class="bad">пишется по-настоящему</b>' : 'ничего не уходит — в журнале видно, что ушло бы' ?>.</p>
         <?php else: ?>
           <p class="hint"><?= h(trim(implode(' · ', array_filter([$c['phone'], $c['email'], $c['messenger_contact'], $c['tg_username'] ? '@' . $c['tg_username'] : ''])))) ?: 'контактов нет' ?>
-            <?php if ((int)$d['lead_id'] > 0): ?> · <a href="<?= h(b24_lead_url((int)$d['lead_id'])) ?>" target="_blank">лид #<?= (int)$d['lead_id'] ?> в Б24</a><?php endif; ?></p>
+            <?php if ((int)$d['lead_id'] > 0): ?> · <a href="<?= h(b24_lead_url((int)$d['lead_id'])) ?>" target="_blank">лид #<?= (int)$d['lead_id'] ?> в Б24</a><?php endif; ?>
+            <?php if ((int)$d['deal_id'] > 0): ?> · <a href="<?= h(b24_deal_url((int)$d['deal_id'])) ?>" target="_blank">сделка #<?= (int)$d['deal_id'] ?></a><?php endif; ?>
+            <?php if ((int)$d['contact_id'] > 0): ?> · <a href="<?= h(b24_contact_url((int)$d['contact_id'])) ?>" target="_blank">контакт #<?= (int)$d['contact_id'] ?></a><?php endif; ?></p>
         <?php endif; ?>
         <div class="chatbox"><div class="chatlog">
           <?php $prevState = null; foreach ($msgs as $m): $a = $m['attachment'] ? jdec($m['attachment']) : null; ?>
@@ -547,23 +549,80 @@ function view_bitrix(array $view): void
 {
     $sc = scenario_active();
     $smart = (int)(sc_setting($sc, 'hr.smart_entity_type_id') ?? 0);
-    $fields = jdec(setting('b24_lead_fields'));
-    $map = b24_map();
-    $at = setting('b24_lead_fields_at');
-    // поля бота: известные + слоты сценария, которых нет в списке
-    $botFields = BOT_FIELDS;
-    foreach ((array)($sc['slots'] ?? []) as $n => $def) {
-        if (!isset($botFields[$n]) && !preg_match(BOT_INTERNAL_SLOTS, $n) && !in_array($def['type'] ?? '', ['counter', 'state_ref'], true)) $botFields[$n] = [$def['label'] ?? $n, 'Другое'];
+    $ent = isset(B24_ENTITIES[$_GET['ent'] ?? '']) ? (string)$_GET['ent'] : 'deal';
+    $fields = b24_fields($ent);
+    $pipes = b24_deal_pipelines();
+    $flow = b24_flow();
+    $at = setting('b24_fields_' . $ent . '_at') ?: setting('b24_lead_fields_at');
+    $loaded = (bool)b24_fields('deal');
+    // поле «Услуга» в сделке — варианты для выбора по направлению
+    $svcCode = bot_field_target($sc, '@product', 'deal');
+    if ($svcCode === '' || $svcCode === '-') $svcCode = bot_field_suggest('@product', b24_fields('deal'), [], 'deal');
+    $svcItems = (b24_fields('deal')[$svcCode]['items'] ?? []);
+    $stageOpts = function (string $sel, string $empty = '— не менять —') use ($pipes): string {
+        $o = '<option value="">' . $empty . '</option>';
+        foreach ($pipes as $cid => $p) {
+            $o .= '<optgroup label="' . h($p['name']) . '">';
+            foreach ($p['stages'] as $sid => $name) $o .= '<option value="' . h($sid) . '"' . ($sel === (string)$sid ? ' selected' : '') . '>' . h($name) . '</option>';
+            $o .= '</optgroup>';
+        }
+        if ($sel !== '' && !array_filter($pipes, fn($p) => isset($p['stages'][$sel]))) $o .= '<option value="' . h($sel) . '" selected>' . h($sel) . '</option>';
+        return $o;
+    };
+    $botStates = array_filter($sc['states'], fn($s, $k) => $k !== 'greeting' && !str_starts_with($k, 'jobs'), ARRAY_FILTER_USE_BOTH);
+    ?>
+    <div class="card">
+      <h2>Битрикс24</h2>
+      <p class="hint"><?= b24_configured() ? 'Портал: ' . h(b24_portal()) . ' · режим <b>' . h(cfg('bitrix_mode', 'dry')) . '</b>' . (cfg('bitrix_mode') !== 'live' ? ' — в CRM ничего не пишется, в журнале диалога видно, что ушло бы' : ' — пишется по-настоящему') : '<b class="bad">вебхук не задан в config.php</b>' ?></p>
+      <form method="post" class="inline-btn" style="display:inline"><?= csrf_field('b24_fields_load') ?><button <?= b24_configured() ? '' : 'disabled' ?>><?= $loaded ? 'Обновить с портала' : 'Загрузить с портала' ?></button></form>
+      <span class="hint"> поля лида, сделки, контакта и воронки сделок<?= $at ? ' · загружено ' . h(fmt_dt($at)) : '' ?></span>
+    </div>
+
+    <form method="post" class="card"><?= csrf_field('b24_flow_save') ?>
+      <h2>Направления: что создаём в CRM</h2>
+      <p class="hint"><b>Сделка</b>: создаётся, когда понятен продукт и известен контакт клиента (телефон, e-mail, Telegram) или диалог дошёл до счёта / передачи менеджеру. Контакт ищется по телефону и e-mail среди существующих, иначе создаётся; сделка с ним связывается. <b>Лид</b>: как раньше (вакансии — всегда лид).
+        <?= $pipes ? '' : '<br><b class="bad">Сначала загрузите данные с портала — появятся воронки и стадии.</b>' ?></p>
+      <?php foreach (FLOW_PRODUCTS as $prod => $title): $f = $flow[$prod] ?? []; $isDeal = ($f['entity'] ?? 'lead') === 'deal'; ?>
+        <details class="card" style="margin:10px 0;padding:10px 14px" <?= $isDeal || in_array($prod, ['visa', 'cards', 'green_card'], true) ? 'open' : '' ?>>
+          <summary><b><?= h($title) ?></b> <span class="muted">— <?= $isDeal ? 'сделка' . (isset($pipes[(string)($f['category'] ?? 0)]) ? ', воронка «' . h($pipes[(string)$f['category']]['name']) . '»' : '') : 'лид' ?></span></summary>
+          <div class="grid" style="margin-top:10px">
+            <label>Создавать<select name="flow[<?= $prod ?>][entity]"><option value="lead">лид</option><option value="deal" <?= $isDeal ? 'selected' : '' ?>>контакт + сделку</option></select></label>
+            <label>Воронка сделок<select name="flow[<?= $prod ?>][category]"><?php foreach ($pipes as $cid => $p): ?><option value="<?= h($cid) ?>" <?= (string)($f['category'] ?? '0') === (string)$cid ? 'selected' : '' ?>><?= h($p['name']) ?></option><?php endforeach; ?><?php if (!$pipes): ?><option value="<?= (int)($f['category'] ?? 0) ?>"><?= (int)($f['category'] ?? 0) ?></option><?php endif; ?></select></label>
+            <label>Стадия при создании<select name="flow[<?= $prod ?>][stage_new]"><?= $stageOpts((string)($f['stage_new'] ?? ''), '— первая стадия воронки —') ?></select></label>
+            <label>«Услуга» в сделке<?php if ($svcItems): ?><select name="flow[<?= $prod ?>][service]"><option value="">— по названию направления —</option><?php foreach ($svcItems as $id => $lbl): ?><option value="<?= h($id) ?>" <?= (string)($f['service'] ?? '') === (string)$id ? 'selected' : '' ?>><?= h($lbl) ?></option><?php endforeach; ?></select>
+              <?php else: ?><input name="flow[<?= $prod ?>][service]" value="<?= h($f['service'] ?? '') ?>" placeholder="сопоставьте «Продукт» с полем сделки ниже"><?php endif; ?></label>
+            <label>Ответственный (ID сотрудника)<input name="flow[<?= $prod ?>][assigned]" value="<?= (int)($f['assigned'] ?? 0) ?: '' ?>" placeholder="пусто — владелец вебхука"></label>
+          </div>
+          <p class="hint" style="margin:4px 0">Стадия сделки по этапам бота (пусто — не менять):</p>
+          <table class="kv">
+            <?php foreach ($botStates as $k => $st): ?>
+              <tr><td><?= h($st['title'] ?? $k) ?><br><code><?= h($k) ?></code></td>
+                <td><select name="flow[<?= $prod ?>][stages][<?= h($k) ?>]" style="margin:0"><?= $stageOpts((string)($f['stages'][$k] ?? '')) ?></select></td></tr>
+            <?php endforeach; ?>
+          </table>
+        </details>
+      <?php endforeach; ?>
+      <button>Сохранить направления</button>
+    </form>
+
+    <?php
+    $map = b24_map($ent);
+    $botFields = bot_fields_for($ent);
+    if ($ent !== 'contact') foreach ((array)($sc['slots'] ?? []) as $n => $def) {
+        if (!isset($botFields[$n]) && !isset(BOT_FIELDS[$n]) && !preg_match(BOT_INTERNAL_SLOTS, $n) && !in_array($def['type'] ?? '', ['counter', 'state_ref'], true)) $botFields[$n] = [$def['label'] ?? $n, 'Другое'];
     }
     $groups = [];
     foreach ($botFields as $n => [$label, $g]) $groups[$g][$n] = $label;
-    $taken = array_values(array_filter($map, fn($v) => $v !== '' && $v !== '-')); // одно поле Битрикса — одному полю бота
-    $opt = function (string $sel) use ($fields): string {
-        $o = '<option value=""' . ($sel === '' ? ' selected' : '') . '>— в комментарий лида —</option><option value="-"' . ($sel === '-' ? ' selected' : '') . '>— не передавать —</option>';
+    $taken = array_values(array_filter($map, fn($v) => $v !== '' && $v !== '-'));
+    $gaps = b24_required_gaps($sc, $ent);
+    $defaults = b24_defaults($ent);
+    $opt = function (string $sel) use ($fields, $ent): string {
+        $o = $ent === 'contact' ? '<option value="-"' . ($sel === '-' || $sel === '' ? ' selected' : '') . '>— не передавать —</option>'
+            : '<option value=""' . ($sel === '' ? ' selected' : '') . '>— в комментарий —</option><option value="-"' . ($sel === '-' ? ' selected' : '') . '>— не передавать —</option>';
         foreach (['Стандартные поля' => false, 'Пользовательские поля' => true] as $title => $custom) {
             $o .= '<optgroup label="' . $title . '">';
-            foreach ($fields as $code => $f) if ($f['custom'] === $custom) {
-                $o .= '<option value="' . h($code) . '"' . ($sel === $code ? ' selected' : '') . '>' . h($f['title']) . ' · ' . h($code) . ' (' . h($f['type']) . ($f['multiple'] ? ', множ.' : '') . ')</option>';
+            foreach ($fields as $code => $f) if ($f['custom'] === $custom && empty($f['readonly'])) {
+                $o .= '<option value="' . h($code) . '"' . ($sel === $code ? ' selected' : '') . '>' . h($f['title']) . ' · ' . h($code) . ' (' . h($f['type']) . ($f['multiple'] ? ', множ.' : '') . ($f['required'] ? ', обяз.' : '') . ')</option>';
             }
             $o .= '</optgroup>';
         }
@@ -571,27 +630,38 @@ function view_bitrix(array $view): void
         return $o;
     };
     ?>
-    <div class="card">
-      <h2>Битрикс24</h2>
-      <p class="hint"><?= b24_configured() ? 'Портал: ' . h(b24_portal()) . ' · режим <b>' . h(cfg('bitrix_mode', 'dry')) . '</b>' . (cfg('bitrix_mode') !== 'live' ? ' — в лиды ничего не пишется, в журнале диалога видно, что ушло бы' : ' — лиды пишутся по-настоящему') : '<b class="bad">вебхук не задан в config.php</b>' ?></p>
-      <form method="post" class="inline-btn" style="display:inline"><?= csrf_field('b24_fields_load') ?><button <?= b24_configured() ? '' : 'disabled' ?>><?= $fields ? 'Обновить поля лида с портала' : 'Загрузить поля лида с портала' ?></button></form>
-      <?php if ($at): ?><span class="hint"> загружено <?= h(fmt_dt($at)) ?>: <?= count($fields) ?> полей, из них пользовательских <?= count(array_filter($fields, fn($f) => $f['custom'])) ?></span><?php endif; ?>
-    </div>
+    <nav class="chips" id="fields"><?php foreach (B24_ENTITIES as $k => $v): ?><a href="?tab=bitrix&ent=<?= $k ?>#fields" class="<?= $ent === $k ? 'on' : '' ?>">Поля: <?= h($v) ?></a><?php endforeach; ?></nav>
+    <form method="post" class="card"><?= csrf_field('b24_map_save', ['entity' => $ent]) ?>
+      <h2>Обязательные поля: <?= h(B24_ENTITIES[$ent]) ?></h2>
+      <?php if (!$fields): ?><p class="hint">Загрузите данные с портала.</p>
+      <?php elseif (!$gaps): ?><p class="hint">На портале нет обязательных полей для этой сущности.</p>
+      <?php else: ?>
+        <p class="hint">Поля, без которых Битрикс может не создать запись. Если бот их не заполняет — задайте значение по умолчанию.</p>
+        <table class="kv">
+          <?php foreach ($gaps as $code => $g): ?>
+            <tr class="<?= $g['how'] === '' ? 'miss' : '' ?>"><td><?= h($g['title']) ?><br><code><?= h($code) ?></code></td>
+              <td><?= $g['how'] !== '' && $g['how'] !== 'значение по умолчанию' ? '<span class="good">' . h($g['how']) . '</span>' : '' ?>
+                <?php if (!in_array($code, B24_SYSTEM_FILLED[$ent] ?? [], true)): ?>
+                  <?php if ($g['items']): ?><select name="def[<?= h($code) ?>]" style="margin:4px 0 0"><option value="">— значение по умолчанию —</option><?php foreach ($g['items'] as $id => $lbl): ?><option value="<?= h($id) ?>" <?= (string)($defaults[$code] ?? '') === (string)$id ? 'selected' : '' ?>><?= h($lbl) ?></option><?php endforeach; ?></select>
+                  <?php else: ?><input name="def[<?= h($code) ?>]" value="<?= h($defaults[$code] ?? '') ?>" placeholder="значение по умолчанию" style="margin-top:4px"><?php endif; ?>
+                  <?= $g['how'] === '' ? '<br><b class="bad">не заполняется — Битрикс может отказать</b>' : '' ?>
+                <?php endif; ?></td></tr>
+          <?php endforeach; ?>
+        </table>
+      <?php endif; ?>
 
-    <form method="post" class="card"><?= csrf_field('b24_map_save') ?>
-      <h2>Поля бота → поля лида</h2>
-      <p class="hint">Для каждого поля, которое собирает бот, выберите существующее поле лида. «В комментарий» — текстом в блок бота в «Комментарии» лида (заметки менеджеров не затираются). Списки Битрикса заполняются по совпадению текста; да/нет — галочкой; числа — числом.
-        <?= $fields ? '' : '<br><b>Сначала загрузите поля лида с портала.</b>' ?> <span style="background:#fff8e6;padding:0 4px">Подсвечено</span> — подобрано автоматически по названию, проверьте.</p>
+      <h2 style="margin-top:16px">Поля бота → поля: <?= h(B24_ENTITIES[$ent]) ?></h2>
+      <p class="hint">Списки Битрикса заполняются по совпадению текста (бот получает варианты списка и старается назвать точно); нет в списке — выбирается «Другой / Другая», если такой вариант есть, а исходное значение — в комментарий. <span style="background:#fff8e6;padding:0 4px">Подсвечено</span> — подобрано по названию, проверьте.</p>
       <table class="kv">
         <?php foreach ($groups as $g => $items): ?>
           <tr><td colspan="2" style="padding-top:14px;font-family:inherit;font-size:14px;color:#1d2330"><b><?= h($g) ?></b></td></tr>
           <?php foreach ($items as $n => $label):
-            if (isset(BOT_FIELDS_FIXED[$n])): ?>
-              <tr><td><?= h($label) ?><br><code><?= h($n) ?></code></td><td class="muted"><?= h(BOT_FIELDS_FIXED[$n]) ?></td></tr>
+            if (isset(BOT_FIELDS_FIXED[$n]) || ($ent === 'deal' && in_array($n, ['client_name', 'phone'], true))): ?>
+              <tr><td><?= h($label) ?><br><code><?= h($n) ?></code></td><td class="muted"><?= $ent === 'deal' ? 'в контакт сделки' : h(BOT_FIELDS_FIXED[$n] ?? '') ?></td></tr>
             <?php continue; endif;
-            $cur = bot_field_target($sc, $n);
+            $cur = bot_field_target($sc, $n, $ent);
             $sug = '';
-            if (!array_key_exists($n, $map) && $cur === '' && $fields) { $sug = bot_field_suggest($n, $fields, $taken); if ($sug !== '') $cur = $sug; }
+            if (!array_key_exists($n, $map) && ($cur === '' || ($ent === 'contact' && $cur === '-')) && $fields) { $sug = bot_field_suggest($n, $fields, $taken, $ent); if ($sug !== '') $cur = $sug; }
             if ($cur !== '' && $cur !== '-') $taken[] = $cur;
           ?>
             <tr<?= $sug ? ' style="background:#fff8e6"' : '' ?>><td><?= h($label) ?><br><code><?= h($n) ?></code></td>
@@ -599,7 +669,7 @@ function view_bitrix(array $view): void
           <?php endforeach; ?>
         <?php endforeach; ?>
       </table>
-      <button>Сохранить сопоставление</button>
+      <button>Сохранить</button>
     </form>
 
     <form method="post" class="card"><?= csrf_field('b24_reference') ?>

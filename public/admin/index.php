@@ -133,6 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $to = (string)$_POST['state'];
                 if (!isset($T['sc']['states'][$to])) throw new RuntimeException('Нет такого состояния');
                 transition($T, $to, 'вручную из админки (' . $me['login'] . ')');
+                crm_sync($T);
                 dialog_save($T['d']);
                 go($back . '#end', 'Диалог переведён в «' . sc_state_title($T['sc'], $to) . '» (действия входа выполнены).');
             case 'dlg_slot':
@@ -256,9 +257,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $tab = 'bitrix';
                 break;
             case 'b24_fields_load':
-                $n = count(b24_lead_fields(true));
-                go('tab=bitrix', "Загружено полей лида: $n. Выберите, куда писать каждое поле бота, и сохраните.");
+                $n = [];
+                foreach (array_keys(B24_ENTITIES) as $ent) $n[] = B24_ENTITIES[$ent] . ': ' . count(b24_fields($ent, true));
+                $p = b24_deal_pipelines(true);
+                go('tab=bitrix', 'Загружено с портала — поля: ' . implode(', ', $n) . '; воронок сделок: ' . count($p) . '.');
             case 'b24_map_save':
+                $ent = isset(B24_ENTITIES[$_POST['entity'] ?? '']) ? (string)$_POST['entity'] : 'lead';
                 $map = [];
                 foreach ((array)($_POST['map'] ?? []) as $k => $v) {
                     $k = (string)$k; $v = (string)$v;
@@ -266,8 +270,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($v !== '' && $v !== '-' && !preg_match('/^[A-Z0-9_]+$/', $v)) continue;
                     $map[$k] = $v;
                 }
-                set_setting('b24_map', jenc((object)$map));
-                go('tab=bitrix', 'Сопоставление полей сохранено. Применится при следующей записи в лид.');
+                set_setting('b24_map_' . $ent, jenc((object)$map));
+                $def = [];
+                foreach ((array)($_POST['def'] ?? []) as $k => $v) if (preg_match('/^[A-Z0-9_]+$/', (string)$k) && trim((string)$v) !== '') $def[$k] = trim((string)$v);
+                set_setting('b24_defaults_' . $ent, jenc((object)$def));
+                go('tab=bitrix&ent=' . $ent, 'Сопоставление полей (' . B24_ENTITIES[$ent] . ') сохранено.');
+            case 'b24_flow_save':
+                $flow = [];
+                foreach ((array)($_POST['flow'] ?? []) as $prod => $f) {
+                    if (!isset(FLOW_PRODUCTS[$prod])) continue;
+                    $stages = [];
+                    foreach ((array)($f['stages'] ?? []) as $st => $id) if ((string)$id !== '') $stages[(string)$st] = (string)$id;
+                    $flow[$prod] = [
+                        'entity' => ($f['entity'] ?? 'lead') === 'deal' ? 'deal' : 'lead',
+                        'category' => (int)($f['category'] ?? 0),
+                        'stage_new' => (string)($f['stage_new'] ?? ''),
+                        'service' => (string)($f['service'] ?? ''),
+                        'assigned' => (int)($f['assigned'] ?? 0),
+                        'stages' => $stages,
+                    ];
+                }
+                set_setting('b24_flow', jenc((object)$flow));
+                go('tab=bitrix', 'Направления сохранены. Применится со следующего сообщения клиента.');
 
             /* --- пользователи --- */
             case 'my_password':

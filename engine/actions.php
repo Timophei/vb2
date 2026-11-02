@@ -70,13 +70,11 @@ function lead_ensure(array &$T): int
     $T['dry_lead'] = true;
     $c = get_client((int)$T['d']['client_id']);
     $fields = [
-        'TITLE' => 'Бот: ' . client_display_name($c) . ' (' . (CHANNEL_NAMES[$T['d']['channel']] ?? $T['d']['channel']) . ')',
-        'NAME' => $c['first_name'], 'LAST_NAME' => $c['last_name'], 'SECOND_NAME' => $c['middle_name'],
+        'TITLE' => crm_title_prefix($T) . 'Бот: ' . client_display_name($c) . ' (' . (CHANNEL_NAMES[$T['d']['channel']] ?? $T['d']['channel']) . ')',
         'SOURCE_DESCRIPTION' => 'бот vb2, ' . (CHANNEL_NAMES[$T['d']['channel']] ?? $T['d']['channel']) . ', диалог #' . $T['d']['id'],
         'OPENED' => 'Y',
-    ];
-    if ($c['phone'] !== '') $fields['PHONE'] = [['VALUE' => $c['phone'], 'VALUE_TYPE' => 'WORK']];
-    if ($c['email'] !== '') $fields['EMAIL'] = [['VALUE' => $c['email'], 'VALUE_TYPE' => 'WORK']];
+    ] + b24_client_fields($c);
+    foreach (b24_defaults('lead') as $code => $val) if ($val !== '') $fields[$code] ??= $val;
     $res = b24_call($T, 'b24_create_lead', 'crm.lead.add', ['fields' => array_filter($fields, fn($v) => $v !== '')]);
     if ($res === null) return 0; // тестовый режим
     $T['d']['lead_id'] = (int)$res['result'];
@@ -113,6 +111,9 @@ function payment_currency(array $T): string
 
 function act_b24_update_lead(array &$T, array $a): void
 {
+    // направление ведётся сделкой (визы, карты, Green Card) — лид не трогаем, сделку обновит crm_sync()
+    if (crm_entity($T) === 'deal') { $T['crm_dirty'] = true; return; }
+
     $spec = $a['fields'] ?? [];
     $fields = [];
     $comment = [];
@@ -120,39 +121,14 @@ function act_b24_update_lead(array &$T, array $a): void
     $sc = $T['sc'];
 
     if (is_string($spec) && str_starts_with($spec, 'slots:')) {
-        $mask = substr($spec, 6);
-        $meta = [];
-        try { $meta = b24_lead_fields(); } catch (Throwable $e) { /* поля не загружены — пишем как текст */ }
-        $vals = $T['d']['slots'] + bot_virtual_values($T);
-        foreach ($vals as $name => $v) {
-            $virtual = str_starts_with($name, '@');
-            if (!$virtual && $mask !== 'all' && !fnmatch($mask, $name)) continue;
-            if (preg_match(BOT_INTERNAL_SLOTS, $name)) continue;
-            $def = sc_slot($sc, $name);
-            $type = $def['type'] ?? 'string';
-            $txt = value_text($v);
-            if ($txt === '' || in_array($type, ['counter', 'state_ref'], true)) continue;
-            if ($type === 'contact') { $fields += contact_fields($v); continue; }
-            if ($type === 'fio' && is_array($v)) {
-                $fields += array_filter(['LAST_NAME' => $v['last'] ?? '', 'NAME' => $v['first'] ?? '', 'SECOND_NAME' => $v['middle'] ?? '']);
-                continue;
-            }
-            if ($type === 'file_or_link') { $comment[] = bot_field_label($name, $sc) . ': ' . (isset($v['link']) ? $v['link'] : 'файл ' . ($v['name'] ?? '') . ' (в ленте лида)'); continue; }
-            $target = bot_field_target($sc, $name);
-            if ($target === '-') continue;
-            if ($target === 'PHONE') { $fields += contact_fields(['type' => 'phone', 'value' => $txt]); continue; }
-            if ($target !== '') {
-                $val = isset($meta[$target]) ? b24_value($target, $v, $meta[$target]) : $txt;
-                if ($val !== null) {
-                    $fields[$target] = $val;
-                    if ($target === 'OPPORTUNITY') $fields['CURRENCY_ID'] = payment_currency($T);
-                    continue;
-                }
-                $comment[] = bot_field_label($name, $sc) . ': ' . $txt . ' (не подошло к полю ' . ($meta[$target]['title'] ?? $target) . ')';
-                continue;
-            }
-            $comment[] = bot_field_label($name, $sc) . ': ' . $txt;
+        [$fields, $comment] = b24_fields_from_slots($T, 'lead', substr($spec, 6));
+        foreach ($T['d']['slots'] as $name => $v) {
+            $type = sc_slot($sc, $name)['type'] ?? '';
+            if ($type === 'contact') $fields += contact_fields($v);
+            if ($type === 'fio' && is_array($v)) $fields += array_filter(['LAST_NAME' => $v['last'] ?? '', 'NAME' => $v['first'] ?? '', 'SECOND_NAME' => $v['middle'] ?? '']);
         }
+        if (isset($fields['OPPORTUNITY'])) $fields['CURRENCY_ID'] = payment_currency($T);
+        $fields += b24_client_fields(get_client((int)$T['d']['client_id']));
     } elseif (is_array($spec)) {
         foreach ($spec as $field => $tplv) {
             if (is_todo($tplv)) { $skipped[] = $field; continue; }
@@ -246,7 +222,8 @@ function act_notify_manager(array &$T, array $a): void
         . "\nКанал: " . (CHANNEL_NAMES[$T['d']['channel']] ?? $T['d']['channel']) . ' · этап: ' . htmlspecialchars(sc_state_title($T['sc'], $T['d']['state']))
         . ($lines ? "\n" . implode("\n", $lines) : '')
         . "\n" . public_url('admin/?tab=dialogs&id=' . $T['d']['id'])
-        . ((int)$T['d']['lead_id'] > 0 ? "\nЛид: " . b24_lead_url((int)$T['d']['lead_id']) : '');
+        . ((int)$T['d']['lead_id'] > 0 ? "\nЛид: " . b24_lead_url((int)$T['d']['lead_id']) : '')
+        . ((int)($T['d']['deal_id'] ?? 0) > 0 ? "\nСделка: " . b24_deal_url((int)$T['d']['deal_id']) : '');
     if ($T['d']['channel'] === 'sandbox') { action_log($T, 'notify_manager', ['priority' => $prio, 'text' => $text], 'песочница: менеджерам не отправлено'); return; }
     $sent = notify_managers($html);
     action_log($T, 'notify_manager', ['priority' => $prio, 'text' => $text], $sent ? 'отправлено в Telegram менеджерам' : 'manager_chat_ids не настроены — уведомление только в админке');

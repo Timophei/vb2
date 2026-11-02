@@ -9,6 +9,11 @@ declare(strict_types=1);
  * При первом запуске загружается scenarios/milli_mind.json из репозитория.
  */
 
+const BUILTIN_SLOTS = [
+    'client.fio' => ['type' => 'fio', 'label' => 'ФИО клиента', '_note' => 'ФИО самого клиента, если он его назвал'],
+    'client.email' => ['type' => 'string', 'label' => 'E-mail клиента', '_note' => 'адрес электронной почты клиента'],
+    'client.messenger' => ['type' => 'string', 'label' => 'Мессенджер клиента', '_note' => 'мессенджер и ник/номер для связи, например «WhatsApp +7…» или «Telegram @nick»'],
+];
 const KNOWN_ACTIONS = ['say', 'b24_update_lead', 'b24_attach_resume', 'b24_create_smart_item', 'openline_finish', 'notify_manager', 'pause_bot'];
 const KNOWN_TOOLS = ['kb_search', 'biometry_check', 'send_form_link', 'create_payment_link'];
 const STATE_TYPES = ['conversation', 'transit', 'waiting', 'terminal'];
@@ -20,6 +25,8 @@ function scenario_from_row(array $row): array
 {
     $sc = json_decode($row['json'], true);
     if (!is_array($sc)) throw new RuntimeException('Сценарий #' . $row['id'] . ' повреждён');
+    // встроенные поля клиента — есть в любом сценарии (ФИО, e-mail, мессенджер для контакта в CRM)
+    foreach (BUILTIN_SLOTS as $k => $def) $sc['slots'][$k] ??= $def;
     $sc['_id'] = (int)$row['id'];
     $sc['_version'] = $row['version'];
     return $sc;

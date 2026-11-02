@@ -159,8 +159,8 @@ function dialog_load(int $id): array
 
 function dialog_save(array $d): void
 {
-    db()->prepare('UPDATE dialogs SET scenario_id = ?, state = ?, slots = ?, counters = ?, state_turns = ?, state_entered_at = ?, paused_until = ?, lead_id = ?, last_at = datetime(\'now\') WHERE id = ?')
-        ->execute([$d['scenario_id'], $d['state'], jenc((object)$d['slots']), jenc((object)$d['counters']), $d['state_turns'], $d['state_entered_at'], $d['paused_until'], $d['lead_id'], $d['id']]);
+    db()->prepare('UPDATE dialogs SET scenario_id = ?, state = ?, slots = ?, counters = ?, state_turns = ?, state_entered_at = ?, paused_until = ?, lead_id = ?, deal_id = ?, contact_id = ?, last_at = datetime(\'now\') WHERE id = ?')
+        ->execute([$d['scenario_id'], $d['state'], jenc((object)$d['slots']), jenc((object)$d['counters']), $d['state_turns'], $d['state_entered_at'], $d['paused_until'], $d['lead_id'], (int)($d['deal_id'] ?? 0), (int)($d['contact_id'] ?? 0), $d['id']]);
 }
 
 /** Сброс диалога в начальное состояние текущей версии сценария (песочница). */
@@ -168,7 +168,7 @@ function dialog_reset(int $id, bool $clearMessages = false): void
 {
     $sc = scenario_active();
     db()->prepare("UPDATE timers SET active = 0, result = 'сброс' WHERE dialog_id = ? AND active = 1")->execute([$id]);
-    db()->prepare("UPDATE dialogs SET scenario_id = ?, state = ?, slots = '{}', counters = '{}', state_turns = 0, state_entered_at = datetime('now'), paused_until = NULL, lead_id = 0 WHERE id = ?")
+    db()->prepare("UPDATE dialogs SET scenario_id = ?, state = ?, slots = '{}', counters = '{}', state_turns = 0, state_entered_at = datetime('now'), paused_until = NULL, lead_id = 0, deal_id = 0, contact_id = 0 WHERE id = ?")
         ->execute([$sc['_id'], $sc['meta']['entry_state'], $id]);
     if ($clearMessages) {
         foreach (['messages', 'transitions', 'llm_calls', 'actions_log', 'timers'] as $t) db()->prepare("DELETE FROM $t WHERE dialog_id = ?")->execute([$id]);

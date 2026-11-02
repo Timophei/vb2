@@ -50,6 +50,17 @@ function b24_mock(string $method, array $params): array
     $GLOBALS['B24'][] = [$method, $params];
     return match ($method) {
         'crm.lead.add' => ['result' => 501],
+        'crm.deal.add' => ['result' => 700],
+        'crm.contact.add' => ['result' => 901],
+        'crm.deal.get' => ['result' => ['COMMENTS' => '']],
+        'crm.duplicate.findbycomm' => ['result' => in_array('+79140000001', $params['values'] ?? [], true) ? ['CONTACT' => [900]] : []],
+        'crm.deal.fields' => ['result' => [
+            'TITLE' => ['type' => 'string', 'title' => 'Название', 'isRequired' => true], 'OPPORTUNITY' => ['type' => 'double', 'title' => 'Сумма'],
+            'UF_CRM_SVC' => ['type' => 'enumeration', 'formLabel' => 'Услуги', 'isMultiple' => true, 'items' => [['ID' => '11', 'VALUE' => 'Визы'], ['ID' => '12', 'VALUE' => 'Green Card'], ['ID' => '13', 'VALUE' => 'Банковские карты']]],
+            'UF_CRM_COUNTRY' => ['type' => 'enumeration', 'formLabel' => 'Страна', 'items' => [['ID' => '21', 'VALUE' => 'Италия'], ['ID' => '22', 'VALUE' => 'Испания'], ['ID' => '29', 'VALUE' => 'Другая']]],
+            'UF_CRM_CITY' => ['type' => 'enumeration', 'formLabel' => 'Город подачи', 'items' => [['ID' => '31', 'VALUE' => 'Москва'], ['ID' => '39', 'VALUE' => 'Другой']]],
+            'UF_CRM_REQ' => ['type' => 'string', 'formLabel' => 'Обязательное поле портала', 'isRequired' => true],
+        ]],
         'crm.item.add' => ['result' => ['item' => ['id' => 77]]],
         'crm.lead.get' => ['result' => ['COMMENTS' => 'заметка менеджера']],
         'crm.lead.fields' => ['result' => [
@@ -216,6 +227,68 @@ check(!str_contains($f['COMMENTS'] ?? '', 'тип обращения'), '«не 
 check(str_contains($f['COMMENTS'] ?? '', 'Продукт / направление обращения: Green Card США'), 'служебное поле без сопоставления — в комментарий');
 check(str_contains($f['COMMENTS'] ?? '', 'заметка менеджера'), 'заметки менеджеров в комментарии сохранены');
 set_setting('b24_map', '{}');
+
+/* ---------- 2г. Сделки и контакты ---------- */
+echo "\n2г. Сделки: контакт (новый или найденный), воронка, стадии, списки с «Другой»\n";
+b24_fields('deal', true);
+set_setting('b24_map_deal', jenc(['@product' => 'UF_CRM_SVC', 'visa.country' => 'UF_CRM_COUNTRY', 'visa.submission_city' => 'UF_CRM_CITY', 'payment.amount' => 'OPPORTUNITY']));
+set_setting('b24_defaults_deal', jenc(['UF_CRM_REQ' => 'бот']));
+set_setting('b24_flow', jenc([
+    'green_card' => ['entity' => 'deal', 'category' => 3, 'stage_new' => 'C3:NEW', 'service' => '12', 'assigned' => 15, 'stages' => ['payment_wait' => 'C3:PREPAYMENT_INVOICE']],
+    'visa' => ['entity' => 'deal', 'category' => 3, 'stage_new' => 'C3:NEW', 'service' => '11'],
+]));
+$gaps = b24_required_gaps(scenario_active(), 'deal');
+check(($gaps['TITLE']['how'] ?? '') === 'заполняет бот' && ($gaps['UF_CRM_REQ']['how'] ?? '') === 'значение по умолчанию', 'проверка обязательных полей сделки');
+check(in_array('Италия', bot_field_options(scenario_active(), 'visa.country'), true), 'классификатору передаются варианты списка «Страна»');
+
+$GLOBALS['CLS'] = [
+    'хочу грин карту' => ['green_card', []],
+    'беру стандартный, я один, согласен' => ['none', ['gc.tariff' => 'standard', 'gc.participants' => '1', 'gc.terms_accepted' => 'true']],
+];
+$GLOBALS['TOOLS'] = ['беру стандартный, я один, согласен' => [['create_payment_link', ['product_id' => 'green_card', 'variant_id' => 'standard', 'options' => [], 'quantity' => 1]]]];
+$c = client_by_key('tg:777');
+attach_telegram((int)$c['id'], ['id' => 777, 'first_name' => 'Олег', 'username' => 'oleg_tg']);
+$dlg = current_dialog((int)$c['id'], 'telegram', true, '777');
+$GLOBALS['B24'] = [];
+say($dlg, 'хочу грин карту');
+$m = array_column($GLOBALS['B24'], 0);
+echo '  Б24: ' . implode(' → ', $m) . "\n";
+$deal = array_values(array_filter($GLOBALS['B24'], fn($x) => $x[0] === 'crm.deal.add'))[0][1]['fields'] ?? [];
+$cont = array_values(array_filter($GLOBALS['B24'], fn($x) => $x[0] === 'crm.contact.add'))[0][1]['fields'] ?? [];
+check(!in_array('crm.lead.add', $m, true), 'лид не создаётся — направление ведётся сделкой');
+check(($cont['IM'][0]['VALUE'] ?? '') === '@oleg_tg' && ($cont['NAME'] ?? '') === 'Олег', 'контакт создан: имя и Telegram');
+check(($deal['CATEGORY_ID'] ?? 0) === 3 && ($deal['STAGE_ID'] ?? '') === 'C3:NEW' && ($deal['CONTACT_ID'] ?? 0) === 901, 'сделка в воронке 3, стадия «новая», связана с контактом');
+check(($deal['UF_CRM_SVC'] ?? null) === ['12'], 'поле «Услуги» = Green Card');
+check(($deal['ASSIGNED_BY_ID'] ?? 0) === 15 && ($deal['UF_CRM_REQ'] ?? '') === 'бот', 'ответственный и обязательное поле по умолчанию');
+check(str_starts_with($deal['TITLE'] ?? '', '[ТЕСТ] Green Card США — '), 'название сделки с пометкой [ТЕСТ]');
+check((int)dialog_load($dlg)['deal_id'] === 700, 'id сделки сохранён в диалоге');
+$GLOBALS['B24'] = [];
+say($dlg, 'беру стандартный, я один, согласен');
+check(state($dlg) === 'payment_wait', 'счёт выставлен');
+$upd = array_values(array_filter($GLOBALS['B24'], fn($x) => $x[0] === 'crm.deal.update'));
+$last = end($upd)[1]['fields'] ?? [];
+check(($last['STAGE_ID'] ?? '') === 'C3:PREPAYMENT_INVOICE', 'ожидание оплаты → стадия «Заключение договора и оплата»');
+check(($last['OPPORTUNITY'] ?? 0) == 3000 && ($last['CURRENCY_ID'] ?? '') === 'RUB', 'сумма сделки = сумма счёта');
+check(!in_array('crm.contact.add', array_column($GLOBALS['B24'], 0), true), 'контакт повторно не создаётся');
+
+echo "\n2д. Виза с сайта: без контакта сделки нет; телефон → найден существующий контакт; страны нет в списке → «Другая»\n";
+$GLOBALS['CLS'] = [
+    'нужна виза во Вьетнам' => ['visa', ['visa.country' => 'Вьетнам']],
+    'подаваться в Москве, мой телефон +7 914 000-00-01' => ['none', ['visa.submission_city' => 'Москва', 'contact' => '+79140000001']],
+];
+$GLOBALS['TOOLS'] = [];
+$dlg = new_dialog('web:visa-deal');
+$GLOBALS['B24'] = [];
+say($dlg, 'нужна виза во Вьетнам');
+check(!array_filter($GLOBALS['B24'], fn($x) => str_starts_with($x[0], 'crm.deal')), 'контакта нет — сделку пока не создаём');
+say($dlg, 'подаваться в Москве, мой телефон +7 914 000-00-01');
+$m = array_column($GLOBALS['B24'], 0);
+echo '  Б24: ' . implode(' → ', $m) . "\n";
+$deal = array_values(array_filter($GLOBALS['B24'], fn($x) => $x[0] === 'crm.deal.add'))[0][1]['fields'] ?? [];
+check(!in_array('crm.contact.add', $m, true) && ($deal['CONTACT_ID'] ?? 0) === 900, 'найден существующий контакт по телефону — привязан');
+check(($deal['UF_CRM_COUNTRY'] ?? '') === '29' && str_contains($deal['COMMENTS'] ?? '', '«Вьетнам» нет в списке'), 'Вьетнама нет в списке → «Другая», исходное — в комментарий');
+check(($deal['UF_CRM_CITY'] ?? '') === '31' && ($deal['UF_CRM_SVC'] ?? null) === ['11'], 'город из списка, услуга «Визы»');
+set_setting('b24_flow', '{}'); set_setting('b24_map_deal', '{}'); set_setting('b24_defaults_deal', '{}');
 
 /* ---------- 3. Глобальные переходы, таймеры, отложено ---------- */
 echo "\n3. Карты: напоминание через 15 мин, «позовите человека», отложено\n";

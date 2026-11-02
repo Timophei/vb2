@@ -22,6 +22,7 @@ require_once __DIR__ . '/../engine/engine.php';
 require_once __DIR__ . '/../engine/llm.php';
 require_once __DIR__ . '/../engine/actions.php';
 require_once __DIR__ . '/../engine/timers.php';
+require_once __DIR__ . '/../engine/crm.php';
 
 const CHANNEL_NAMES = ['web' => 'сайт', 'telegram' => 'Telegram', 'bitrix' => 'открытая линия Б24', 'sandbox' => 'песочница'];
 const ROLE_NAMES = ['user' => 'Клиент', 'assistant' => 'Бот', 'operator' => 'Менеджер', 'system' => 'Служебное'];
@@ -229,6 +230,10 @@ function migrate(PDO $pdo): void
     CREATE TABLE IF NOT EXISTS rate (k TEXT NOT NULL, ts INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS rate_k ON rate(k, ts);
     SQL);
+    // сделка и контакт Битрикс24 (направления, которые ведутся сделкой)
+    $cols = array_column($pdo->query('PRAGMA table_info(dialogs)')->fetchAll(), 'name');
+    if (!in_array('deal_id', $cols, true)) $pdo->exec('ALTER TABLE dialogs ADD COLUMN deal_id INTEGER NOT NULL DEFAULT 0');
+    if (!in_array('contact_id', $cols, true)) $pdo->exec('ALTER TABLE dialogs ADD COLUMN contact_id INTEGER NOT NULL DEFAULT 0');
 }
 
 /* ------------------------------------------------------------------ */

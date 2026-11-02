@@ -71,6 +71,12 @@ function slot_hint_line(array $sc, string $name, array $def, $current): string
     $type = $def['type'] ?? 'string';
     $h = "- {$name}: " . ($def['label'] ?? '') . ' (' . (SLOT_TYPE_HINTS[$type] ?? $type);
     if ($type === 'enum') $h .= '; одно из: ' . implode(', ', (array)$def['values']);
+    // поле привязано к списку в Битрикс24 — просим назвать значение точно из списка
+    $opts = in_array($type, ['string', 'list'], true) ? bot_field_options($sc, $name) : [];
+    if ($opts && count($opts) <= 150) {
+        $other = array_values(array_filter($opts, fn($o) => preg_match('/^\s*друг/iu', $o)));
+        $h .= '; называй значение ТОЧНО из списка: ' . implode(', ', $opts) . ($other ? '; если подходящего нет — «' . $other[0] . '»' : '');
+    }
     if ($type === 'catalog_ref') {
         $codes = [];
         foreach (catalog_all(true) as $p) {

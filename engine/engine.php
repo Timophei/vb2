@@ -35,6 +35,7 @@ function ctx_value(array $T, string $path)
     $path = trim($path);
     if (str_starts_with($path, 'settings.')) return sc_setting($T['sc'], substr($path, 9));
     if ($path === 'lead.id') return (int)$T['d']['lead_id'] ?: null;
+    if ($path === 'deal.id') return (int)($T['d']['deal_id'] ?? 0) ?: null;
     if ($path === 'dialog.id') return $T['d']['id'];
     if ($path === 'state') return $T['d']['state'];
     $slots = $T['d']['slots'];
@@ -203,7 +204,11 @@ function sync_client_slots(array &$T): void
     if (isset($slots['phone']) && empty($d['slots']['phone']) && $c['phone'] !== '') $d['slots']['phone'] = $c['phone'];
     // слоты → клиент
     $upd = [];
-    if (!empty($d['slots']['client_name'])) $upd['first_name'] = $d['slots']['client_name'];
+    $cf = $d['slots']['client.fio'] ?? null;
+    if (is_array($cf)) { $upd['last_name'] = $cf['last'] ?? ''; $upd['first_name'] = $cf['first'] ?? ''; $upd['middle_name'] = $cf['middle'] ?? ''; }
+    if (!empty($d['slots']['client.email'])) $upd['email'] = (string)$d['slots']['client.email'];
+    if (!empty($d['slots']['client.messenger'])) $upd['messenger_contact'] = (string)$d['slots']['client.messenger'];
+    if (!empty($d['slots']['client_name']) && empty($upd['first_name'])) $upd['first_name'] = $d['slots']['client_name'];
     if (!empty($d['slots']['phone'])) $upd['phone'] = $d['slots']['phone'];
     foreach ($d['slots'] as $name => $v) {
         $t = $slots[$name]['type'] ?? '';
@@ -360,6 +365,7 @@ function transition(array &$T, string $to, string $reason): void
         $T['d']['slots'] = array_intersect_key($T['d']['slots'], array_flip($keep));
         $T['d']['counters'] = array_intersect_key($T['d']['counters'], ['event:client_message' => 1]);
         $T['d']['lead_id'] = 0;
+        $T['d']['deal_id'] = 0; // контакт оставляем — это тот же человек
         $T['changed'] = [];
     }
     $T['d']['state'] = $to;
@@ -495,6 +501,7 @@ function engine_finish(array &$T, bool $needReply, string $userText, string $eve
     // вложения от инструментов (QR-код счёта) — отдельными сообщениями после ответа
     foreach ($T['attach'] ?? [] as $a) save_message((int)$T['d']['id'], 'assistant', $a['text'], $a['att'], $T['d']['state']);
     $T['attach'] = [];
+    crm_sync($T); // сделка и контакт в Битрикс24 (если направление ведётся сделкой)
     if ($out) timers_start_state($T['d'], $T['sc'], $T['d']['state'], 'bot_answered_question');
     timers_sync_slots($T['d'], $T['sc']);
     dialog_save($T['d']);

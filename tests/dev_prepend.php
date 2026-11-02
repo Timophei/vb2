@@ -52,5 +52,23 @@ function b24_mock(string $method, array $p): array
         'UF_CRM_VISA_DATES' => ['type' => 'string', 'formLabel' => 'Виза: предполагаемые даты'], 'UF_CRM_VISA_APPLICANTS' => ['type' => 'string', 'formLabel' => 'Виза: количество заявителей'],
         'UF_CRM_1690000001' => ['type' => 'enumeration', 'formLabel' => 'Услуга', 'items' => [['ID' => 1, 'VALUE' => 'Визы'], ['ID' => 2, 'VALUE' => 'Green Card США']]],
     ]];
+    if ($method === 'crm.deal.fields') return ['result' => [
+        'TITLE' => ['type' => 'string', 'title' => 'Название', 'isRequired' => true], 'OPPORTUNITY' => ['type' => 'double', 'title' => 'Сумма'],
+        'UF_CRM_SERVICES' => ['type' => 'enumeration', 'formLabel' => 'Услуги', 'isMultiple' => true, 'items' => [['ID' => 11, 'VALUE' => 'Визы'], ['ID' => 12, 'VALUE' => 'Green Card'], ['ID' => 13, 'VALUE' => 'Банковские карты']]],
+        'UF_CRM_COUNTRY' => ['type' => 'enumeration', 'formLabel' => 'Страна', 'items' => [['ID' => 21, 'VALUE' => 'Италия'], ['ID' => 22, 'VALUE' => 'Испания'], ['ID' => 29, 'VALUE' => 'Другая']]],
+        'UF_CRM_CITY' => ['type' => 'enumeration', 'formLabel' => 'Город', 'items' => [['ID' => 31, 'VALUE' => 'Москва'], ['ID' => 39, 'VALUE' => 'Другой']]],
+        'UF_CRM_SOURCE2' => ['type' => 'enumeration', 'formLabel' => 'Откуда узнали', 'isRequired' => true, 'items' => [['ID' => 51, 'VALUE' => 'Сайт'], ['ID' => 52, 'VALUE' => 'Telegram']]],
+    ]];
+    if ($method === 'crm.contact.fields') return ['result' => [
+        'NAME' => ['type' => 'string', 'title' => 'Имя', 'isRequired' => true], 'LAST_NAME' => ['type' => 'string', 'title' => 'Фамилия'],
+        'PHONE' => ['type' => 'crm_multifield', 'title' => 'Телефон'], 'UF_CRM_CITIZENSHIP' => ['type' => 'string', 'formLabel' => 'Гражданство'],
+    ]];
+    if ($method === 'crm.category.list') return ['result' => ['categories' => [['id' => 0, 'name' => 'Общая'], ['id' => 3, 'name' => 'Продажи']]]];
+    if ($method === 'crm.status.list') {
+        $e = $p['filter']['ENTITY_ID'] ?? '';
+        if ($e === 'DEAL_STAGE_3') return ['result' => [['STATUS_ID' => 'C3:NEW', 'NAME' => 'Новая'], ['STATUS_ID' => 'C3:PREPARATION', 'NAME' => 'Консультация'], ['STATUS_ID' => 'C3:PREPAYMENT_INVOICE', 'NAME' => 'Заключение договора и оплата'], ['STATUS_ID' => 'C3:WON', 'NAME' => 'Оплачено']]];
+        if ($e === 'DEAL_STAGE') return ['result' => [['STATUS_ID' => 'NEW', 'NAME' => 'Новая'], ['STATUS_ID' => 'WON', 'NAME' => 'Успешно']]];
+        return ['result' => [['STATUS_ID' => 'NEW', 'NAME' => 'Не обработан'], ['STATUS_ID' => 'UC_IGWO64', 'NAME' => 'HR', 'EXTRA' => ['SEMANTICS' => 'F']]]];
+    }
     return ['result' => true];
 }
