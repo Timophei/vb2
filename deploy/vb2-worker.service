@@ -1,0 +1,19 @@
+# Служба: воркер таймеров vb2 (напоминания, ожидание оплаты, «отложено»).
+# Установка:
+#   sudo cp /var/www/vb2/deploy/vb2-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now vb2-worker
+# Журнал: sudo journalctl -u vb2-worker -n 50
+[Unit]
+Description=vb2 bot: timers worker
+After=network-online.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/vb2
+ExecStart=/usr/bin/php bin/worker.php
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

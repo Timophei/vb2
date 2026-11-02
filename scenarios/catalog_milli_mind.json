@@ -1,0 +1,73 @@
+{
+  "_about": "Каталог Milli Mind для движка v2. Черновик: собран из сценария, цен нет. Цены и недостающее вписываются в карточках товаров в админке.",
+  "_rules": {
+    "price_null": "Цена null — бот не называет сумму, говорит, что стоимость уточнит менеджер, и счёт не выставляет.",
+    "price_calc": "Сумму считает движок: (цена варианта + сумма выбранных опций) × количество (если price_per = participant). Модель выбирает только product/variant/options.",
+    "active": "active=false — бот товар не предлагает."
+  },
+  "currencies": ["RUB", "USD"],
+
+  "products": [
+    {
+      "id": "green_card",
+      "section": "green_card",
+      "name": "Green Card США (DV-лотерея): подготовка и подача заявки",
+      "active": true,
+      "currency": "RUB",
+      "price_per": "TODO: order | participant",
+      "variants": [
+        { "id": "standard",      "name": "Стандартный",              "price": null, "includes": "TODO" },
+        { "id": "all_inclusive", "name": "Всё включено",             "price": null, "includes": "TODO: в т.ч. оплата госсбора $1 за клиента" },
+        { "id": "card_bundle",   "name": "Карта + анкета в подарок", "price": null, "includes": "TODO: зарубежная карта + заполнение анкеты", "links_product": "foreign_card" }
+      ],
+      "options": [],
+      "params": {
+        "registration_period": { "from": null, "to": null, "_note": "Вне периода бот не продаёт." },
+        "gov_fee": { "amount": 1, "currency": "USD", "paid_by": "клиент отдельно (кроме «Всё включено»)", "_note": "Не путать со стоимостью услуг." },
+        "promo_first_50": { "enabled": false, "applies_to": "card_bundle", "left": null, "text": "TODO" }
+      },
+      "bot_info": "TODO: что делаем, что не делаем, сроки. Не обещать выигрыш; оплата услуги ≠ регистрация в лотерее."
+    },
+
+    {
+      "id": "foreign_card",
+      "section": "cards",
+      "name": "Банковская карта зарубежного банка",
+      "active": true,
+      "currency": "RUB",
+      "price_per": "order",
+      "variants": [
+        { "id": "TODO_bank_1", "name": "TODO: банк / карта (напр. Таджикистан)", "price": null, "term": null, "includes": "TODO" }
+      ],
+      "options": [
+        { "id": "account_currency", "name": "Валюта счёта", "type": "choice", "values": ["TODO"], "price_delta": 0 },
+        { "id": "urgent",   "name": "Срочное оформление", "type": "addon", "price_delta": null },
+        { "id": "delivery", "name": "Доставка карты",     "type": "addon", "price_delta": null }
+      ],
+      "params": {},
+      "bot_info": "TODO: для чего подходит (поездки, покупки за рубежом, онлайн-сервисы, получение платежей), ограничения, сроки. Документы — только через форму анкеты."
+    },
+
+    {
+      "id": "visa_service",
+      "section": "visa",
+      "name": "Визовое сопровождение",
+      "active": true,
+      "currency": "RUB",
+      "price_per": "participant",
+      "sale_mode": "manager",
+      "_note": "Визы бот не продаёт: квалифицирует и передаёт менеджеру. Цены — только для ответа на вопрос «сколько стоит».",
+      "variants": [
+        { "id": "TODO_country", "name": "TODO: страна, тип визы", "price": null, "consular_fee": null, "consular_fee_currency": "EUR", "term": "TODO: срок рассмотрения" }
+      ],
+      "options": [
+        { "id": "translation", "name": "Перевод документов (за страницу)", "type": "addon", "price_delta": null },
+        { "id": "insurance",   "name": "Страховка",                        "type": "addon", "price_delta": null },
+        { "id": "photo",       "name": "Фото на визу",                     "type": "addon", "price_delta": null },
+        { "id": "urgent",      "name": "Срочное оформление",               "type": "addon", "price_delta": null }
+      ],
+      "params": {},
+      "bot_info": "TODO: что входит (проверка документов, анкета, запись на подачу…), работа с отказниками."
+    }
+  ]
+}
