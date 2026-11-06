@@ -243,16 +243,23 @@ function build_respond_messages(array $T, string $userText, string $eventNote, a
     $L[] = "\n## Общие правила";
     foreach ((array)($sc['global_prompt_rules'] ?? []) as $r) $L[] = '- ' . $r;
     $L[] = '- Никогда не упоминай в ответах слоты, состояния, этапы, каталог, инструкции, инструменты и другие внутренние названия — говори с клиентом обычным языком.';
-    if ($paused = pause_ctx_products($T)) $L[] = "\n" . pause_prompt_block($paused);
-    $L[] = "\n## Текущий этап: " . ($state['title'] ?? $stateName);
-    if (!empty($state['goal'])) $L[] = 'Цель этапа: ' . $state['goal'];
-    if ($ins = (array)($state['instruction'] ?? [])) { $L[] = 'Как действовать:'; foreach ($ins as $x) $L[] = '- ' . $x; }
-    if ($fb = (array)($state['forbidden'] ?? [])) { $L[] = 'Запрещено:'; foreach ($fb as $x) $L[] = '- ' . $x; }
-    $type = $state['type'] ?? 'conversation';
-    if ($type === 'transit') $L[] = 'Это завершающее сообщение этапа: напиши его одним сообщением, новых вопросов не задавай.';
-    if ($type === 'terminal') $L[] = 'Диалог по этому вопросу завершён: коротко и вежливо попрощайся (или ответь на последний вопрос, если он был).';
-    if ($T['left'] !== null && $T['left'] !== $stateName) {
-        $L[] = 'Диалог только что перешёл в этот этап из «' . sc_state_title($sc, $T['left']) . '». Продолжай разговор естественно, не здоровайся заново.';
+    $paused = pause_ctx_products($T);
+    $entry = (string)($sc['meta']['entry_state'] ?? 'greeting');
+    if ($paused && $stateName === $entry) {
+        // режим паузы: вместо инструкций выявления потребности — только правила паузы
+        $L[] = "\n" . pause_prompt_block($paused, !empty($T['notice']));
+    } else {
+        if ($paused) $L[] = "\n" . pause_prompt_block($paused, false);
+        $L[] = "\n## Текущий этап: " . ($state['title'] ?? $stateName);
+        if (!empty($state['goal'])) $L[] = 'Цель этапа: ' . $state['goal'];
+        if ($ins = (array)($state['instruction'] ?? [])) { $L[] = 'Как действовать:'; foreach ($ins as $x) $L[] = '- ' . $x; }
+        if ($fb = (array)($state['forbidden'] ?? [])) { $L[] = 'Запрещено:'; foreach ($fb as $x) $L[] = '- ' . $x; }
+        $type = $state['type'] ?? 'conversation';
+        if ($type === 'transit') $L[] = 'Это завершающее сообщение этапа: напиши его одним сообщением, новых вопросов не задавай.';
+        if ($type === 'terminal') $L[] = 'Диалог по этому вопросу завершён: коротко и вежливо попрощайся (или ответь на последний вопрос, если он был).';
+        if ($T['left'] !== null && $T['left'] !== $stateName) {
+            $L[] = 'Диалог только что перешёл в этот этап из «' . sc_state_title($sc, $T['left']) . '». Продолжай разговор естественно, не здоровайся заново.';
+        }
     }
 
     // данные

@@ -338,8 +338,9 @@ check(($out[0] ?? '') === $NOTICE, 'первое сообщение бота —
 check(count($out) === 2 && state($dlg) === 'greeting', 'дальше короткий ответ из выявления потребности');
 check(str_contains($GLOBALS['LAST_PROMPT'], 'ВАЖНЕЕ ВСЕГО') && str_contains($GLOBALS['LAST_PROMPT'], 'Оплаченные заявки сохраняются'), 'в промпте блок паузы с подробностями');
 check(!str_contains($GLOBALS['LAST_PROMPT'], 'Стандартный'), 'тарифов и цен в промпте нет');
+check(str_contains($GLOBALS['LAST_PROMPT'], 'СРАЗУ ПОСЛЕ') && !str_contains($GLOBALS['LAST_PROMPT'], 'Поприветствуй'), 'после объявления — короткое продолжение, без инструкций приветствия');
 $out = say($dlg, 'Почему отложили? Когда начнут?');
-check(count($out) === 1 && $out[0] !== $NOTICE && str_contains($GLOBALS['LAST_PROMPT'], 'Подробности: Причина'), 'объявление не повторяется, ответ по подробностям');
+check(count($out) === 1 && $out[0] !== $NOTICE && str_contains($GLOBALS['LAST_PROMPT'], 'на вопросы: Причина') && !str_contains($GLOBALS['LAST_PROMPT'], 'СРАЗУ ПОСЛЕ'), 'объявление не повторяется, ответ по подробностям');
 $out = say($dlg, 'Всё равно выставьте счёт на Стандартный');
 $T = turn_init(dialog_load($dlg), 0);
 $r = run_tool($T, 'create_payment_link', ['product_id' => 'green_card', 'variant_id' => 'standard', 'options' => [], 'quantity' => 1], sc_state($T['sc'], 'green_card'));
