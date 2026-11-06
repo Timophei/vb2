@@ -259,6 +259,7 @@ function run_tool(array &$T, string $name, array $args, array $state): array
 
 function tool_create_payment_link(array &$T, array $args, array $state): array
 {
+    if ($why = product_sale_blocked((string)($args['product_id'] ?? ''))) return ['error' => $why, 'blocked' => true];
     // согласие: обязательные bool-слоты этапа должны быть true
     foreach ((array)($state['slots_required'] ?? []) as $sl) {
         if ((sc_slot($T['sc'], $sl)['type'] ?? '') === 'bool' && slot_get($T, $sl) !== true) {
@@ -344,6 +345,7 @@ function pay_url(string $code): string { return public_url('pay.php?c=' . $code)
 
 function tool_send_form_link(array &$T, array $args): array
 {
+    if ($why = product_sale_blocked((string)($args['product_id'] ?? ''))) return ['error' => $why, 'blocked' => true];
     $url = (string)($T['sc']['tools']['send_form_link']['url'] ?? '');
     if ($url === '' || is_todo($url)) return ['error' => 'ссылка на анкету ещё не настроена. Скажи клиенту, что анкету пришлёт менеджер, и не проси паспортные данные в чате.'];
     $sets = (string)($T['sc']['tools']['send_form_link']['sets'] ?? '');

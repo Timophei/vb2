@@ -124,6 +124,10 @@ function view_dialog_card(int $id, bool $sandbox): void
             <?php if ($paused): ?><br><b>Бот на паузе до <?= h(fmt_dt($d['paused_until'], 'H:i')) ?></b>
               <form method="post" class="inline-btn"><?= csrf_field('dlg_unpause', ['dialog' => $id, 'back' => $back]) ?><button class="sec">Снять паузу</button></form><?php endif; ?></p>
           <?php if (!empty($state['goal'])): ?><p class="hint">Цель: <?= h($state['goal']) ?></p><?php endif; ?>
+          <?php $pz = array_filter(catalog_all(true), fn($p) => product_sales_status($p) !== 'open'); if ($pz): ?>
+            <div class="warn" style="font-size:13px">На паузе: <?php foreach ($pz as $p): ?><b><?= h($p['name'] ?? $p['id']) ?></b> (<?= h(SALES_STATUSES[product_sales_status($p)]) ?>, объявление <?= !empty($d['counters']['notice_shown.' . $p['id']]) ? 'отправлено' : 'ещё не отправлялось' ?>) <?php endforeach; ?>
+              <?= !empty($d['counters']['pause_ctx']) ? '<br>Сейчас разговор о товаре на паузе — бот отвечает по подробностям и не продаёт.' : '' ?><?= !empty($d['counters']['waitlist']) ? '<br>Клиент в листе ожидания.' : '' ?></div>
+          <?php endif; ?>
           <div class="ctl">
             <form method="post"><?= csrf_field('dlg_event', ['dialog' => $id, 'back' => $back]) ?>
               <select name="event">
@@ -355,6 +359,9 @@ function catalog_from_post(array $p): array
         'options' => $options,
         'params' => $paramsArr,
         'bot_info' => trim(str_replace("\r\n", "\n", (string)($p['bot_info'] ?? ''))),
+        'sales_status' => isset(SALES_STATUSES[$p['sales_status'] ?? '']) ? (string)$p['sales_status'] : 'open',
+        'pause_notice' => trim(str_replace("\r\n", "\n", (string)($p['pause_notice'] ?? ''))),
+        'pause_details' => trim(str_replace("\r\n", "\n", (string)($p['pause_details'] ?? ''))),
         '_sort' => (int)($p['sort'] ?? 100),
     ];
 }
@@ -375,7 +382,7 @@ function view_catalog(): void
             <td><a href="?tab=catalog&id=<?= urlencode($x['id']) ?>"><?= h($x['name'] ?? $x['id']) ?></a><br><code><?= h($x['id']) ?></code></td>
             <td><?= h($x['section']) ?></td>
             <td><small><?= h(implode('; ', array_map(fn($v) => ($v['name'] ?? $v['id']) . ' — ' . money_fmt($v['price'] ?? null, (string)($v['currency'] ?? $x['currency'] ?? 'RUB')), $x['variants'] ?? []))) ?></small></td>
-            <td><?= ($x['sale_mode'] ?? 'bot') === 'manager' ? 'менеджер' : 'бот' ?></td>
+            <td><?= ($x['sale_mode'] ?? 'bot') === 'manager' ? 'менеджер' : 'бот' ?><?= product_sales_status($x) !== 'open' ? '<br><b class="bad">' . h(SALES_STATUSES[product_sales_status($x)]) . '</b>' : '' ?></td>
             <td class="nw"><?= h(fmt_dt($x['_updated'])) ?></td></tr>
         <?php endforeach; ?>
       </table>
@@ -419,6 +426,13 @@ function view_catalog(): void
         <?php endforeach; ?>
       </table>
       <button type="button" class="sec" onclick="addRow('ot')">+ опция</button>
+      <h2 style="margin-top:14px">Статус продаж</h2>
+      <div class="grid">
+        <label>Статус продаж<select name="sales_status"><?php foreach (SALES_STATUSES as $k => $v): ?><option value="<?= $k ?>" <?= ($p['sales_status'] ?? 'open') === $k ? 'selected' : '' ?>><?= h($v) ?></option><?php endforeach; ?></select></label>
+      </div>
+      <p class="hint">«Активен» — бот знает о товаре; «Статус продаж» — можно ли продавать. На паузе бот один раз отправляет объявление дословно, отвечает на вопросы по подробностям, счёт и анкету не выдаёт, предлагает сообщить о возобновлении и возвращает разговор к другим услугам. Включить обратно — статус «продажи открыты».</p>
+      <label>Объявление (отправляется клиенту слово в слово)<textarea name="pause_notice" rows="4" style="font-family:inherit"><?= h($p['pause_notice'] ?? '') ?></textarea></label>
+      <label>Подробности для ответов на вопросы во время паузы<textarea name="pause_details" rows="6" style="font-family:inherit"><?= h($p['pause_details'] ?? '') ?></textarea></label>
       <label style="margin-top:14px">Для бота — описание, что входит, условия, ограничения<textarea name="bot_info" rows="5" style="font-family:inherit"><?= h($p['bot_info'] ?? '') ?></textarea></label>
       <label>Параметры (JSON) — период регистрации, акции и т. п.<textarea name="params" rows="6"><?= h($p['params'] ? json_encode($p['params'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) : '') ?></textarea></label>
       <button>Сохранить</button>

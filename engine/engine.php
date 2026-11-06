@@ -298,7 +298,7 @@ function cond_text(array $on): string
 
 function turn_init(array $d, int $msgId = 0): array
 {
-    return ['d' => $d, 'sc' => scenario_for($d), 'msg_id' => $msgId, 'visited' => [], 'reply_state' => null, 'say' => [], 'changed' => [], 'left' => null, 'error' => null];
+    return ['d' => $d, 'sc' => scenario_for($d), 'msg_id' => $msgId, 'visited' => [], 'reply_state' => null, 'say' => [], 'changed' => [], 'left' => null, 'error' => null, 'notice' => []];
 }
 
 /**
@@ -350,11 +350,11 @@ function eval_transitions(array &$T, array $ctx): void
     action_log($T, 'transition', [], "достигнут лимит переходов за ход ($max)", false);
 }
 
-function transition(array &$T, string $to, string $reason): void
+function transition(array &$T, string $to, string $reason, bool $runExit = true): void
 {
     $from = $T['d']['state'];
     $sc = $T['sc'];
-    run_actions($T, (array)(sc_state($sc, $from)['on_exit'] ?? []), "$from.on_exit");
+    if ($runExit) run_actions($T, (array)(sc_state($sc, $from)['on_exit'] ?? []), "$from.on_exit");
     timers_cancel_state($T['d'], $from);
 
     db()->prepare('INSERT INTO transitions(dialog_id, message_id, from_state, to_state, reason, set_json) VALUES(?,?,?,?,?,?)')
@@ -363,7 +363,8 @@ function transition(array &$T, string $to, string $reason): void
     if (sc_state_type($sc, $from) === 'terminal') {
         $keep = (array)(sc_setting($sc, 'keep_slots_on_restart') ?? ['client_name', 'phone', 'contact']);
         $T['d']['slots'] = array_intersect_key($T['d']['slots'], array_flip($keep));
-        $T['d']['counters'] = array_intersect_key($T['d']['counters'], ['event:client_message' => 1]);
+        // объявления о паузе и лист ожидания — на весь диалог, не повторяем
+        $T['d']['counters'] = array_filter($T['d']['counters'], fn($k) => $k === 'event:client_message' || str_starts_with($k, 'notice_shown.') || $k === 'waitlist', ARRAY_FILTER_USE_KEY);
         $T['d']['lead_id'] = 0;
         $T['d']['deal_id'] = 0; // контакт оставляем — это тот же человек
         $T['changed'] = [];
@@ -458,6 +459,7 @@ function engine_message(int $dialogId, string $text, ?array $attachment = null):
     $max = (int)(sc_state($T['sc'], $T['d']['state'])['max_turns'] ?? 0);
     if ($max > 0 && $T['d']['state_turns'] > $max) eval_transitions($T, ['event' => 'turn_limit_exceeded']);
 
+    pause_check($T); // товар этапа не продаётся → объявление и назад к выявлению потребности
     return engine_finish($T, true, $text);
 }
 
@@ -490,6 +492,9 @@ function engine_finish(array &$T, bool $needReply, string $userText, string $eve
         try {
             $reply = respond($T, $userText, $eventNote);
             if ($reply !== '') array_unshift($out, $reply);
+            // объявление о паузе — первым, слово в слово
+            foreach (array_reverse($T['notice'] ?? []) as $n) array_unshift($out, $n);
+            $T['notice'] = [];
         } catch (Throwable $e) {
             action_log($T, 'respond', [], 'ошибка ответа: ' . $e->getMessage(), false);
             app_log('respond: ' . $e->getMessage());
@@ -507,6 +512,7 @@ function engine_finish(array &$T, bool $needReply, string $userText, string $eve
     // вложения от инструментов (QR-код счёта) — отдельными сообщениями после ответа
     foreach ($T['attach'] ?? [] as $a) save_message((int)$T['d']['id'], 'assistant', $a['text'], $a['att'], $T['d']['state']);
     $T['attach'] = [];
+    pause_waitlist($T); // контакт во время паузы → лист ожидания
     crm_sync($T); // сделка и контакт в Битрикс24 (если направление ведётся сделкой)
     if ($out) timers_start_state($T['d'], $T['sc'], $T['d']['state'], 'bot_answered_question');
     timers_sync_slots($T['d'], $T['sc']);

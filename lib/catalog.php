@@ -36,6 +36,7 @@ function catalog_all(bool $onlyActive = false): array
         $p['active'] = (bool)$r['active'];
         $p['_sort'] = (int)$r['sort'];
         $p['_updated'] = $r['updated_at'];
+        $p['sales_status'] = product_sales_status($p); // старые записи: open, или из params.sales_status
         if ($onlyActive && !$p['active']) continue;
         $out[$r['id']] = $p;
     }
@@ -60,6 +61,8 @@ function catalog_save(array $p, ?int $sort = null): void
     unset($v);
     foreach ($p['options'] as &$o) $o['price_delta'] = price_or_null($o['price_delta'] ?? null);
     unset($o);
+    $p['sales_status'] = product_sales_status($p);
+    unset($p['params']['sales_status']);
     $data = $p;
     unset($data['id'], $data['section'], $data['active'], $data['_sort'], $data['_updated']);
     $sort ??= (int)($p['_sort'] ?? 100);
@@ -145,6 +148,7 @@ function catalog_prompt(array $sections): string
     $secs = array_map('normalize_section', $sections);
     $out = [];
     foreach (catalog_all(true) as $p) {
+        if (product_sales_status($p) !== 'open') continue; // приостановленный товар бот не продаёт — тарифов и цен не видит
         $p = strip_todo($p);
         $match = false;
         foreach ($secs as $s) if ($p['section'] === $s || str_starts_with($p['section'], $s . '/')) $match = true;

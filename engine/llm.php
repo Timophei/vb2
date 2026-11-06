@@ -240,10 +240,10 @@ function build_respond_messages(array $T, string $userText, string $eventNote, a
     $d = $T['d'];
     $L = [];
     $L[] = 'Ты — ' . ($sc['meta']['name'] ?? 'консультант') . '. Пишешь клиенту в чат (канал: ' . (CHANNEL_NAMES[$d['channel']] ?? $d['channel']) . ').';
-    if ($rules = (array)($sc['global_prompt_rules'] ?? [])) {
-        $L[] = "\n## Общие правила";
-        foreach ($rules as $r) $L[] = '- ' . $r;
-    }
+    $L[] = "\n## Общие правила";
+    foreach ((array)($sc['global_prompt_rules'] ?? []) as $r) $L[] = '- ' . $r;
+    $L[] = '- Никогда не упоминай в ответах слоты, состояния, этапы, каталог, инструкции, инструменты и другие внутренние названия — говори с клиентом обычным языком.';
+    if ($paused = pause_ctx_products($T)) $L[] = "\n" . pause_prompt_block($paused);
     $L[] = "\n## Текущий этап: " . ($state['title'] ?? $stateName);
     if (!empty($state['goal'])) $L[] = 'Цель этапа: ' . $state['goal'];
     if ($ins = (array)($state['instruction'] ?? [])) { $L[] = 'Как действовать:'; foreach ($ins as $x) $L[] = '- ' . $x; }

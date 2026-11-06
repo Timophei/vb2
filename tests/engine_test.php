@@ -33,6 +33,7 @@ function openai_mock(string $path, array $p): array
         foreach ($slots as $k => $v) $arr[] = ['name' => $k, 'value' => (string)$v];
         return ['choices' => [['message' => ['content' => json_encode(['intent' => $intent, 'slots' => $arr], JSON_UNESCAPED_UNICODE)]]], 'usage' => ['total_tokens' => 10]];
     }
+    $GLOBALS['LAST_PROMPT'] = $msgs[0]['content'];
     preg_match('/## Текущий этап: (.+)/u', $msgs[0]['content'], $m);
     $stage = $m[1] ?? '?';
     $hadTool = (bool)array_filter($msgs, fn($x) => $x['role'] === 'tool');
@@ -314,6 +315,50 @@ $out = say($dlg, 'ещё вопрос');
 check($out !== [] && !dialog_taken(dialog_load($dlg)), 'вернули боту — бот снова отвечает');
 set_setting('b24_bot_user', '0');
 set_setting('b24_flow', '{}'); set_setting('b24_map_deal', '{}'); set_setting('b24_defaults_deal', '{}');
+
+/* ---------- 2ж. Пауза продаж товара ---------- */
+echo "\n2ж. Green Card на паузе: объявление дословно, ответы по подробностям, без продажи, лист ожидания\n";
+$NOTICE = 'Лотерея DV-2027 перенесена Госдепартаментом США. Новые даты пока не объявлены.';
+$gc = catalog_get('green_card');
+$gc['sales_status'] = 'paused'; $gc['pause_notice'] = $NOTICE; $gc['pause_details'] = 'Причина — решение Госдепартамента. Сроки не объявлены. Оплаченные заявки сохраняются.';
+catalog_save($gc);
+$GLOBALS['CLS'] = [
+    'Я насчёт лотереи грин карт' => ['green_card', []],
+    'Почему отложили? Когда начнут?' => ['green_card', []],
+    'Всё равно выставьте счёт на Стандартный' => ['green_card', ['gc.tariff' => 'standard', 'gc.terms_accepted' => 'true']],
+    'а карта для поездок есть?' => ['cards', []],
+    'нет, карта не нужна' => ['refuse', []],
+    'и всё-таки про грин карту' => ['green_card', []],
+    'сообщите мне, мой телефон +7 914 222-33-44' => ['none', ['contact' => '+79142223344']],
+];
+$GLOBALS['TOOLS'] = [];
+$dlg = new_dialog('web:pause1');
+$out = say($dlg, 'Я насчёт лотереи грин карт');
+check(($out[0] ?? '') === $NOTICE, 'первое сообщение бота — объявление слово в слово');
+check(count($out) === 2 && state($dlg) === 'greeting', 'дальше короткий ответ из выявления потребности');
+check(str_contains($GLOBALS['LAST_PROMPT'], 'ВАЖНЕЕ ВСЕГО') && str_contains($GLOBALS['LAST_PROMPT'], 'Оплаченные заявки сохраняются'), 'в промпте блок паузы с подробностями');
+check(!str_contains($GLOBALS['LAST_PROMPT'], 'Стандартный'), 'тарифов и цен в промпте нет');
+$out = say($dlg, 'Почему отложили? Когда начнут?');
+check(count($out) === 1 && $out[0] !== $NOTICE && str_contains($GLOBALS['LAST_PROMPT'], 'Подробности: Причина'), 'объявление не повторяется, ответ по подробностям');
+$out = say($dlg, 'Всё равно выставьте счёт на Стандартный');
+$T = turn_init(dialog_load($dlg), 0);
+$r = run_tool($T, 'create_payment_link', ['product_id' => 'green_card', 'variant_id' => 'standard', 'options' => [], 'quantity' => 1], sc_state($T['sc'], 'green_card'));
+check(!empty($r['blocked']) && state($dlg) === 'greeting', 'счёт заблокирован кодом, разговор не уходит в продажу');
+$blk = db()->query("SELECT COUNT(*) FROM actions_log WHERE dialog_id = $dlg AND action = 'tool:create_payment_link' AND ok = 0")->fetchColumn();
+check($blk >= 1, 'блокировка видна в журнале');
+say($dlg, 'а карта для поездок есть?');
+check(state($dlg) === 'cards' && empty(dialog_load($dlg)['counters']['pause_ctx']), 'ушли в карты — обычная ветка');
+say($dlg, 'нет, карта не нужна');
+$out = say($dlg, 'и всё-таки про грин карту');
+check(!in_array($NOTICE, $out, true) && state($dlg) === 'greeting', 'вернулись к Green Card — объявление не повторяется');
+$GLOBALS['B24'] = [];
+say($dlg, 'сообщите мне, мой телефон +7 914 222-33-44');
+$upd = array_values(array_filter($GLOBALS['B24'], fn($x) => $x[0] === 'crm.lead.update'));
+check($upd && str_contains($upd[0][1]['fields']['TITLE'] ?? '', 'Лист ожидания: Green Card'), 'контакт оставлен → лид «Лист ожидания»');
+$gc['sales_status'] = 'open'; catalog_save($gc);
+$dlg = new_dialog('web:pause2');
+$out = say($dlg, 'Я насчёт лотереи грин карт');
+check(state($dlg) === 'green_card' && !in_array($NOTICE, $out, true), 'статус «открыты» — обычная продажа без правки сценария');
 
 /* ---------- 3. Глобальные переходы, таймеры, отложено ---------- */
 echo "\n3. Карты: напоминание через 15 мин, «позовите человека», отложено\n";
