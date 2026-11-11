@@ -3,8 +3,8 @@
   "meta": {
     "id": "milli_mind",
     "name": "AI-консультант Milli Mind",
-    "version": "0.7-draft",
-    "based_on": "Состояния AI-консультанта Milli Mind v0.4 + ответы от 28.10.2026 + HR-воронка от 29.10.2026 + пауза продаж от 06.11.2026",
+    "version": "0.8-draft",
+    "based_on": "Состояния AI-консультанта Milli Mind v0.4 + ответы от 28.10.2026 + HR-воронка от 29.10.2026 + пауза продаж от 06.11.2026 + «Чем ещё?» от 12.11.2026",
     "status": "draft",
     "entry_state": "greeting"
   },
@@ -170,7 +170,8 @@
       "transitions": [
         { "on": { "slots_complete": "required" }, "set": { "handoff_reason": "визовая квалификация собрана" }, "to": "handed_to_manager" },
         { "on": { "counter": "visa.biometry_questions", "gte": 3 }, "set": { "handoff_reason": "вопросы о записи на биометрию" }, "to": "handed_to_manager" },
-        { "on": { "intent": "wants_biometry_booking" }, "set": { "handoff_reason": "клиент хочет записаться на биометрию" }, "to": "handed_to_manager" }
+        { "on": { "intent": "wants_biometry_booking" }, "set": { "handoff_reason": "клиент хочет записаться на биометрию" }, "to": "handed_to_manager" },
+        { "on": { "intent": "refuse" }, "to": "anything_else" }
       ]
     },
 
@@ -207,7 +208,7 @@
       "transitions": [
         { "on": { "event": "invoice_sent" }, "to": "payment_wait" },
         { "on": { "intent": "postpone" },    "set": { "followup.return_state": "cards" }, "to": "postponed" },
-        { "on": { "intent": "refuse" },      "to": "closed" },
+        { "on": { "intent": "refuse" },      "to": "anything_else" },
         { "on": { "intent": "needs_manager" }, "set": { "handoff_reason": "карты: нужен менеджер" }, "to": "handed_to_manager" }
       ]
     },
@@ -257,7 +258,7 @@
         { "on": { "event": "invoice_sent" }, "to": "payment_wait" },
         { "on": { "intent": "insists_on_card_only" }, "to": "cards" },
         { "on": { "intent": "postpone" }, "set": { "followup.return_state": "green_card" }, "to": "postponed" },
-        { "on": { "intent": "refuse" }, "to": "closed" },
+        { "on": { "intent": "refuse" }, "to": "anything_else" },
         { "on": { "intent": "needs_manager" }, "set": { "handoff_reason": "Green Card: нужен специалист" }, "to": "handed_to_manager" }
       ]
     },
@@ -293,7 +294,7 @@
         { "on": { "intent": "visa" },       "to": "visa" },
         { "on": { "intent": "cards" },      "to": "cards" },
         { "on": { "intent": "green_card" }, "to": "green_card" },
-        { "on": { "intent": "refuse" },     "to": "closed" }
+        { "on": { "intent": "refuse" },     "to": "anything_else" }
       ]
     },
 
@@ -329,7 +330,7 @@
         { "action": "openline_finish", "mode": "{{settings.hr.finish_mode}}", "transfer_to": "{{settings.hr.assigned_by_id}}" }
       ],
       "on_error": { "set": { "handoff_reason": "вакансия: ошибка записи в Б24" }, "to": "handed_to_manager" },
-      "transitions": [ { "on": { "always": true }, "to": "closed" } ]
+      "transitions": [ { "on": { "always": true }, "to": "anything_else" } ]
     },
 
     "other": {
@@ -357,7 +358,7 @@
         { "on": { "intent": "green_card" }, "to": "green_card" },
         { "on": { "intent": "jobs" },       "to": "jobs" },
         { "on": { "intent": "needs_staff" }, "set": { "handoff_reason": "другое обращение" }, "to": "handed_to_manager" },
-        { "on": { "intent": "resolved" },   "to": "closed" }
+        { "on": { "intent": "resolved" },   "to": "anything_else" }
       ]
     },
 
@@ -458,10 +459,42 @@
       ]
     },
 
+    "anything_else": {
+      "title": "Чем ещё?",
+      "type": "conversation",
+      "goal": "Завершить предыдущую тему по-человечески и понять, нужно ли клиенту что-то ещё.",
+      "instruction": [
+        "Предыдущая тема закрыта (откуда пришли и с чем — в блоке выше). Не возвращайся к продаже по ней и не повторяй уже сказанное.",
+        "Вопросы по предыдущей теме отвечай здесь — коротко, только по фактам. Не отправляй клиента «обратно» и не начинай тему заново.",
+        "Спроси, можешь ли помочь чем-то ещё. Уместно можно предположить одну смежную потребность (например, после визы — карту для поездки), без навязывания.",
+        "Клиент назвал новую задачу — коротко подтверди, дальше её поведёт соответствующий этап.",
+        "Клиент благодарит и прощается — тепло попрощайся."
+      ],
+      "forbidden": [
+        "Здороваться заново.",
+        "Повторять или пересказывать предыдущие сообщения и объявления.",
+        "Продавать недоступный продукт, называть его тарифы и цены."
+      ],
+      "knowledge": ["kb/general"],
+      "tools": ["kb_search"],
+      "slots_collect": ["intent"],
+      "max_turns": 10,
+      "transitions": [
+        { "on": { "slot": "intent", "eq": "visa" },             "to": "visa" },
+        { "on": { "slot": "intent", "eq": "cards" },            "to": "cards" },
+        { "on": { "slot": "intent", "eq": "green_card" },       "to": "green_card" },
+        { "on": { "slot": "intent", "eq": "jobs" },             "to": "jobs" },
+        { "on": { "slot": "intent", "eq": "existing_service" }, "to": "existing_service" },
+        { "on": { "slot": "intent", "eq": "other" },            "to": "other" },
+        { "on": { "intent": "resolved" }, "to": "closed" },
+        { "on": { "intent": "refuse" },   "to": "closed" }
+      ]
+    },
+
     "closed": {
       "title": "Закрыто",
       "type": "terminal",
-      "instruction": ["Диалог завершён. Если клиент пишет снова — начать с greeting без повторного знакомства."],
+      "instruction": ["Диалог завершён: коротко и тепло попрощайся. Если клиент пишет снова — разговор начнётся заново, без повторного знакомства."],
       "transitions": [ { "on": { "event": "client_message" }, "to": "greeting" } ]
     }
   },

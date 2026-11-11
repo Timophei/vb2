@@ -24,6 +24,7 @@ require_once __DIR__ . '/../engine/actions.php';
 require_once __DIR__ . '/../engine/timers.php';
 require_once __DIR__ . '/../engine/crm.php';
 require_once __DIR__ . '/../engine/pause.php';
+require_once __DIR__ . '/../engine/anything_else.php';
 
 const CHANNEL_NAMES = ['web' => 'сайт', 'telegram' => 'Telegram', 'bitrix' => 'открытая линия Б24', 'sandbox' => 'песочница'];
 const ROLE_NAMES = ['user' => 'Клиент', 'assistant' => 'Бот', 'operator' => 'Менеджер', 'system' => 'Служебное'];

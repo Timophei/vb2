@@ -124,6 +124,7 @@ function view_dialog_card(int $id, bool $sandbox): void
             <?php if ($paused): ?><br><b>Бот на паузе до <?= h(fmt_dt($d['paused_until'], 'H:i')) ?></b>
               <form method="post" class="inline-btn"><?= csrf_field('dlg_unpause', ['dialog' => $id, 'back' => $back]) ?><button class="sec">Снять паузу</button></form><?php endif; ?></p>
           <?php if (!empty($state['goal'])): ?><p class="hint">Цель: <?= h($state['goal']) ?></p><?php endif; ?>
+          <?php if (!empty($d['counters']['origin_state'])): ?><p class="hint">Пришли из: <b><?= h(sc_state_title($sc, (string)$d['counters']['origin_state'])) ?></b><?= !empty($d['counters']['origin_reason']) ? ' — ' . h($d['counters']['origin_reason']) : '' ?>. Вопросы по этой теме бот отвечает здесь.</p><?php endif; ?>
           <?php $pz = array_filter(catalog_all(true), fn($p) => product_sales_status($p) !== 'open'); if ($pz): ?>
             <div class="warn" style="font-size:13px">На паузе: <?php foreach ($pz as $p): ?><b><?= h($p['name'] ?? $p['id']) ?></b> (<?= h(SALES_STATUSES[product_sales_status($p)]) ?>, объявление <?= !empty($d['counters']['notice_shown.' . $p['id']]) ? 'отправлено' : 'ещё не отправлялось' ?>) <?php endforeach; ?>
               <?= !empty($d['counters']['pause_ctx']) ? '<br>Сейчас разговор о товаре на паузе — бот отвечает по подробностям и не продаёт.' : '' ?><?= !empty($d['counters']['waitlist']) ? '<br>Клиент в листе ожидания.' : '' ?></div>

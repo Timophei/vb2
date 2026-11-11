@@ -298,7 +298,7 @@ function cond_text(array $on): string
 
 function turn_init(array $d, int $msgId = 0): array
 {
-    return ['d' => $d, 'sc' => scenario_for($d), 'msg_id' => $msgId, 'visited' => [], 'reply_state' => null, 'say' => [], 'changed' => [], 'left' => null, 'error' => null, 'notice' => []];
+    return ['d' => $d, 'sc' => scenario_for($d), 'msg_id' => $msgId, 'visited' => [], 'reply_state' => null, 'say' => [], 'changed' => [], 'left' => null, 'error' => null, 'notice' => [], 'origin_set' => false];
 }
 
 /**
@@ -344,6 +344,11 @@ function eval_transitions(array &$T, array $ctx): void
             action_log($T, 'transition', ['to' => $to], "состояния «{$to}» нет в сценарии", false);
             return;
         }
+        // товар цели не продаётся → «Чем ещё?» (объявление — один раз); уже там — остаёмся и отвечаем
+        if (($alt = pause_redirect($T, $to)) !== null) {
+            if ($alt === $state) continue;
+            $to = $alt;
+        }
         transition($T, $to, (!empty($fired['_g']) ? 'глобальный: ' : '') . cond_text($on));
         if (count(array_keys($T['visited'], $to, true)) > 2) return; // защита от петель
     }
@@ -369,8 +374,11 @@ function transition(array &$T, string $to, string $reason, bool $runExit = true)
         $T['d']['deal_id'] = 0; // контакт оставляем — это тот же человек
         $T['changed'] = [];
     }
+    $ae = ae_state($sc);
+    if ($ae !== null && $from === $ae && $to !== $ae) ae_on_leave($T, $to);
     $T['d']['state'] = $to;
     $T['d']['state_turns'] = 0;
+    if ($ae !== null && $to === $ae) ae_on_enter($T, $from, $reason);
     $T['d']['state_entered_at'] = now_utc();
     foreach (array_keys($T['d']['counters']) as $k) if (str_starts_with($k, 'timer:')) unset($T['d']['counters'][$k]);
     $T['visited'][] = $to;
@@ -512,6 +520,7 @@ function engine_finish(array &$T, bool $needReply, string $userText, string $eve
     // вложения от инструментов (QR-код счёта) — отдельными сообщениями после ответа
     foreach ($T['attach'] ?? [] as $a) save_message((int)$T['d']['id'], 'assistant', $a['text'], $a['att'], $T['d']['state']);
     $T['attach'] = [];
+    unset($T['d']['counters']['ae_entered']);
     pause_waitlist($T); // контакт во время паузы → лист ожидания
     crm_sync($T); // сделка и контакт в Битрикс24 (если направление ведётся сделкой)
     if ($out) timers_start_state($T['d'], $T['sc'], $T['d']['state'], 'bot_answered_question');

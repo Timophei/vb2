@@ -75,22 +75,13 @@ function pause_check(array &$T): void
     $paused = paused_products_for_state($T, $state);
     if (!$paused) {
         // ушли в другую ветку продаж — контекст паузы больше не нужен
-        if ($state !== $entry && sc_state_type($sc, $state) === 'conversation') unset($T['d']['counters']['pause_ctx']);
+        if ($state !== $entry && $state !== ae_state($sc) && sc_state_type($sc, $state) === 'conversation') unset($T['d']['counters']['pause_ctx']);
         return;
     }
-    foreach ($paused as $id => $p) {
-        $key = 'notice_shown.' . $id;
-        if (!empty($T['d']['counters'][$key])) continue;
-        $notice = trim((string)($p['pause_notice'] ?? ''));
-        if ($notice === '') $notice = 'Продажи «' . ($p['name'] ?? $id) . '» сейчас ' . SALES_STATUSES[product_sales_status($p)] . '.';
-        $T['notice'][] = $notice;
-        $T['d']['counters'][$key] = 1;
-        action_log($T, 'pause_notice', ['товар' => $id], 'отправлено объявление о паузе');
-    }
-    $T['d']['counters']['pause_ctx'] = implode(',', array_keys($paused));
-    unset($T['d']['slots']['intent']); // следующий вопрос снова распределится из выявления потребности
-    if ($state !== $entry && isset($sc['states'][$entry])) {
-        transition($T, $entry, 'товар на паузе: ' . implode(', ', array_map(fn($p) => $p['name'] ?? $p['id'], $paused)), false);
+    // сюда попадаем, только если вошли в состояние мимо переходов (например, вручную из админки)
+    $target = pause_redirect($T, $state);
+    if ($target !== null && $target !== $state && isset($sc['states'][$target])) {
+        transition($T, $target, 'товар на паузе', false);
         $T['reply_state'] = null;
     }
 }
@@ -114,7 +105,7 @@ function pause_prompt_block(array $products, bool $justSent = false): string
     if ($justSent) {
         $L[] = '- Твоё сообщение отправится СРАЗУ ПОСЛЕ объявления. Не здоровайся, не переспрашивай, о чём клиент, не пересказывай и не дополняй объявление.';
         $L[] = '- Если клиент в сообщении задал конкретный вопрос — ответь на него одной фразой по Подробностям. Если нет — сразу к следующему пункту.';
-        $L[] = '- Предложи сообщить о возобновлении: попроси телефон или e-mail (если их ещё нет). И спроси, можешь ли помочь с чем-то ещё — визы, банковские карты.';
+        $L[] = '- Можно одной фразой предложить сообщить о возобновлении (попросить телефон или e-mail, если их нет) и спросить, чем ещё помочь.';
         $L[] = '- Всего 1–2 коротких предложения.';
     } else {
         $L[] = '- Объявление не повторяй и не пересказывай. На вопросы о паузе отвечай только по Подробностям; чего там нет — скажи, что сообщим, как только появятся новости. Дат, причин и фактов от себя не добавляй.';

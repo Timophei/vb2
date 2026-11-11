@@ -245,8 +245,18 @@ function build_respond_messages(array $T, string $userText, string $eventNote, a
     $L[] = '- Никогда не упоминай в ответах слоты, состояния, этапы, каталог, инструкции, инструменты и другие внутренние названия — говори с клиентом обычным языком.';
     $paused = pause_ctx_products($T);
     $entry = (string)($sc['meta']['entry_state'] ?? 'greeting');
-    if ($paused && $stateName === $entry) {
-        // режим паузы: вместо инструкций выявления потребности — только правила паузы
+    $ae = ae_state($sc);
+    $justEntered = !empty($T['d']['counters']['ae_entered']) && in_array($ae, $T['visited'], true);
+    if ($ae !== null && $stateName === $ae) {
+        // «Чем ещё?»: откуда пришли + пауза (если тема — недоступный товар) + инструкции состояния
+        $L[] = "\n" . ae_prompt_block($T, $justEntered);
+        if ($paused) $L[] = "\n" . pause_prompt_block($paused, !empty($T['notice']));
+        $L[] = "\n## Текущий этап: " . ($state['title'] ?? $stateName);
+        if (!empty($state['goal'])) $L[] = 'Цель этапа: ' . $state['goal'];
+        if ($ins = (array)($state['instruction'] ?? [])) { $L[] = 'Как действовать:'; foreach ($ins as $x) $L[] = '- ' . $x; }
+        if ($fb = (array)($state['forbidden'] ?? [])) { $L[] = 'Запрещено:'; foreach ($fb as $x) $L[] = '- ' . $x; }
+    } elseif ($paused && $stateName === $entry) {
+        // режим паузы без «Чем ещё?» в сценарии: вместо инструкций выявления потребности — только правила паузы
         $L[] = "\n" . pause_prompt_block($paused, !empty($T['notice']));
     } else {
         if ($paused) $L[] = "\n" . pause_prompt_block($paused, false);
@@ -312,6 +322,9 @@ function respond(array &$T, string $userText, string $eventNote = ''): string
     $stateName = $T['reply_state'] ?? $T['d']['state'];
     $state = sc_state($T['sc'], $stateName);
     [$kb, $cat] = state_knowledge($T, $state);
+    // «Чем ещё?»: справка ещё и из базы знаний прежней темы (без каталога — продажи там нет)
+    $origin = (string)($T['d']['counters']['origin_state'] ?? '');
+    if ($origin !== '' && $stateName === ae_state($T['sc'])) $kb = array_values(array_unique(array_merge($kb, state_knowledge($T, sc_state($T['sc'], $origin))[0])));
     $search = $userText;
     if ($search === '') foreach (array_reverse(dialog_messages((int)$T['d']['id'], 6)) as $m) if ($m['role'] === 'user') { $search = $m['content']; break; }
     $chunks = [];
