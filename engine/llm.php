@@ -81,6 +81,7 @@ function slot_hint_line(array $sc, string $name, array $def, $current): string
         $codes = [];
         foreach (catalog_all(true) as $p) {
             if (isset($def['catalog']) && $p['section'] !== normalize_section((string)$def['catalog'])) continue;
+            if (product_sales_status($p) !== 'open') { $codes[] = $p['id'] . ' (' . ($p['name'] ?? '') . ' — сейчас не продаётся)'; continue; }
             $codes[] = $p['id'] . ' (' . ($p['name'] ?? '') . ')';
             foreach ($p['variants'] ?? [] as $v) if (!str_starts_with((string)$v['id'], 'TODO')) $codes[] = $p['id'] . ':' . $v['id'] . ' (' . ($v['name'] ?? '') . ')';
         }
@@ -279,14 +280,23 @@ function build_respond_messages(array $T, string $userText, string $eventNote, a
     foreach ($d['slots'] as $name => $v) {
         $txt = value_text($v);
         if ($txt === '' || preg_match('/^(payment\.invoice_id)$/', $name)) continue;
-        $known[] = "- {$name}: {$txt}";
+        $known[] = '- ' . bot_field_label($name, $sc) . ": {$txt}";
     }
     foreach ($req as $sl) if (!slot_filled(slot_get($T, $sl), sc_slot($sc, $sl))) $missing[] = $sl;
     $L[] = "\n## Что уже известно (не переспрашивай)";
     $L[] = $known ? implode("\n", $known) : '- пока ничего';
     if ($missing) $L[] = 'Нужно ещё узнать (обязательно для этапа, спрашивай по 1–2 за сообщение, к месту): ' . implode(', ', $missing);
     $optMissing = array_values(array_filter($opt, fn($sl) => !slot_filled(slot_get($T, $sl), sc_slot($sc, $sl))));
-    if ($optMissing) $L[] = 'Желательно узнать, если уместно: ' . implode(', ', $optMissing);
+    if ($optMissing) $L[] = 'Желательно узнать, если уместно: ' . implode(', ', array_map(fn($sl) => bot_field_label($sl, $sc), $optMissing));
+    // вопросы для подбора из раздела каталога
+    foreach ((array)($state['section_questions'] ?? []) as $secCode => $qs) {
+        $L[] = "\n## Подбор: вопросы клиенту";
+        $L[] = 'Спрашивай по 1–2 за сообщение и только то, что поможет выбрать между подходящими вариантами (не анкета подряд). Когда данных хватает — порекомендуй 1–2 варианта из каталога и обоснуй выбор фактами из характеристик, опираясь на ответы клиента.';
+        foreach ($qs as $q) {
+            $ans = value_text(slot_get($T, section_question_slot($secCode, $q['code'])));
+            $L[] = '- ' . $q['question'] . ($q['affects'] !== '' ? ' (влияет на: ' . $q['affects'] . ')' : '') . ' — ' . ($ans !== '' ? 'ответ: ' . $ans : 'ещё не знаем');
+        }
+    }
     $c = get_client((int)$d['client_id']);
     if ($c) {
         $ci = array_filter(['имя' => trim($c['first_name'] . ' ' . $c['last_name']), 'телефон' => $c['phone'], 'e-mail' => $c['email'], 'мессенджер' => $c['messenger_contact']]);

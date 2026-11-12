@@ -330,17 +330,22 @@ function catalog_from_post(array $p): array
         $n = count((array)($data[$cols[0]] ?? []));
         for ($i = 0; $i < $n; $i++) {
             $r = [];
-            foreach ($cols as $c) $r[$c] = trim((string)($data[$c][$i] ?? ''));
+            foreach ($cols as $c) $r[$c] = trim(str_replace("\r\n", "\n", (string)($data[$c][$i] ?? '')));
             if ($r[$cols[0]] === '') continue;
             $out[] = $r;
         }
         return $out;
     };
-    $variants = $rows('v', ['id', 'name', 'price', 'currency', 'term', 'includes']);
-    foreach ($variants as &$v) { if ($v['currency'] === '') unset($v['currency']); }
+    $variants = $rows('v', ['id', 'name', 'price', 'currency', 'bank_fee', 'props']);
+    foreach ($variants as &$v) {
+        $v['id'] = strtolower(preg_replace('/[^a-z0-9_]/i', '_', $v['id']));
+        if ($v['currency'] === '') unset($v['currency']);
+        $v['props'] = props_norm($v['props']);
+    }
     unset($v);
-    $options = $rows('o', ['id', 'name', 'type', 'price_delta', 'values']);
+    $options = $rows('o', ['id', 'name', 'type', 'price_delta', 'bank_fee', 'values']);
     foreach ($options as &$o) {
+        $o['id'] = strtolower(preg_replace('/[^a-z0-9_]/i', '_', $o['id']));
         $o['values'] = array_values(array_filter(array_map('trim', explode(',', $o['values']))));
         if ($o['type'] !== 'choice') unset($o['values']);
     }
@@ -348,80 +353,167 @@ function catalog_from_post(array $p): array
     $params = trim((string)($p['params'] ?? ''));
     $paramsArr = $params === '' ? [] : json_decode($params, true);
     if (!is_array($paramsArr)) throw new RuntimeException('Параметры — должен быть JSON-объект (или пусто): ' . json_last_error_msg());
+    $txt = fn(string $k) => trim(str_replace("\r\n", "\n", (string)($p[$k] ?? '')));
     return [
         'id' => str_replace('-', '_', strtolower(trim((string)$p['id']))),
         'name' => trim((string)$p['name']) ?: trim((string)$p['id']),
         'section' => (string)$p['section'],
         'active' => !empty($p['active']),
         'currency' => (string)($p['currency'] ?? 'RUB'),
+        'price' => $txt('price'),
         'price_per' => ($p['price_per'] ?? 'order') === 'participant' ? 'participant' : 'order',
         'sale_mode' => ($p['sale_mode'] ?? 'bot') === 'manager' ? 'manager' : 'bot',
+        'fit' => $txt('fit'),
+        'limits' => $txt('limits'),
+        'documents' => $txt('documents'),
+        'process' => $txt('process'),
+        'props' => props_norm($txt('props')),
         'variants' => $variants,
         'options' => $options,
         'params' => $paramsArr,
-        'bot_info' => trim(str_replace("\r\n", "\n", (string)($p['bot_info'] ?? ''))),
+        'bot_info' => $txt('bot_info'),
         'sales_status' => isset(SALES_STATUSES[$p['sales_status'] ?? '']) ? (string)$p['sales_status'] : 'open',
-        'pause_notice' => trim(str_replace("\r\n", "\n", (string)($p['pause_notice'] ?? ''))),
-        'pause_details' => trim(str_replace("\r\n", "\n", (string)($p['pause_details'] ?? ''))),
+        'pause_notice' => $txt('pause_notice'),
+        'pause_details' => $txt('pause_details'),
         '_sort' => (int)($p['sort'] ?? 100),
     ];
+}
+
+/** Характеристики тарифа текстом; старые поля «Срок» / «Что входит» показываются как характеристики. */
+function variant_props_text(array $v): string
+{
+    $props = props_norm($v['props'] ?? []);
+    if (!empty($v['term'])) $props[] = ['Срок', (string)$v['term']];
+    if (!empty($v['includes'])) $props[] = ['Что входит', (string)$v['includes']];
+    return props_text($props);
+}
+
+/** Какие состояния сценария опираются на раздел каталога. */
+function section_users(string $code): array
+{
+    $out = [];
+    foreach (scenario_active()['states'] as $k => $s) foreach ((array)($s['knowledge'] ?? []) as $ref) {
+        if (!is_string($ref) || !str_starts_with($ref, 'catalog:')) continue;
+        $sec = normalize_section(substr($ref, 8));
+        if ($code === $sec || str_starts_with($code, $sec . '/')) $out[] = $s['title'] ?? $k;
+    }
+    return array_values(array_unique($out));
 }
 
 function view_catalog(): void
 {
     $all = catalog_all();
+    $secs = sections_all();
     $id = (string)($_GET['id'] ?? '');
-    $p = $id === 'new' ? ['id' => '', 'name' => '', 'section' => 'general', 'active' => true, 'currency' => 'RUB', 'price_per' => 'order', 'variants' => [], 'options' => [], 'params' => [], 'bot_info' => '', '_sort' => 100] : ($all[$id] ?? null);
+    $secSel = (string)($_GET['sec'] ?? '');
+    $rep = $_SESSION['import_report'] ?? null; unset($_SESSION['import_report']);
+    $p = $id === 'new' ? ['id' => '', 'name' => '', 'section' => $secSel ?: 'general', 'active' => true, 'currency' => 'RUB', 'price' => null, 'price_per' => 'order', 'variants' => [], 'options' => [], 'props' => [], 'params' => [], 'bot_info' => '', '_sort' => 100] : ($all[$id] ?? null);
+    $list = $secSel !== '' ? array_filter($all, fn($x) => $x['section'] === $secSel) : $all;
     ?>
     <div class="card">
       <h2>Каталог</h2>
-      <p class="hint">Цены и условия бот берёт только отсюда. Сумму счёта считает программа: (цена варианта + опции) × участники, если цена «за участника». Пустая цена — бот говорит «стоимость уточнит менеджер» и счёт не выставляет.</p>
+      <p class="hint">Цены и условия бот берёт только отсюда. Сумму счёта считает программа: (наша цена тарифа или товара + опции) × участники, если цена «за участника». Пустая цена — бот говорит «стоимость уточнит менеджер» и счёт не выставляет. «Плата банку» — справочно для клиента, в счёт не входит. По характеристикам бот подбирает товар и объясняет выбор.</p>
+      <p class="tabs-inline">Разделы:
+        <a href="?tab=catalog" class="<?= $secSel === '' ? 'on' : '' ?>">все (<?= count($all) ?>)</a>
+        <?php foreach ($secs as $s): $n = count(array_filter($all, fn($x) => $x['section'] === $s['code'])); ?>
+          · <a href="?tab=catalog&sec=<?= urlencode($s['code']) ?>" class="<?= $secSel === $s['code'] ? 'on' : '' ?>"><?= h($s['name'] !== '' ? $s['name'] : $s['code']) ?> (<?= $n ?>)</a>
+        <?php endforeach; ?>
+      </p>
       <table class="clients">
-        <tr><th>Товар</th><th>Раздел</th><th>Варианты</th><th>Продаёт</th><th>Обновлён</th></tr>
-        <?php foreach ($all as $x): ?>
+        <tr><th>Товар</th><th>Раздел</th><th>Наша цена / тарифы</th><th>Продаёт</th><th>Обновлён</th></tr>
+        <?php foreach ($list as $x): $cur = (string)($x['currency'] ?? 'RUB'); ?>
           <tr class="<?= $x['active'] ? '' : 'off' ?>" onclick="location='?tab=catalog&id=<?= urlencode($x['id']) ?>'">
             <td><a href="?tab=catalog&id=<?= urlencode($x['id']) ?>"><?= h($x['name'] ?? $x['id']) ?></a><br><code><?= h($x['id']) ?></code></td>
             <td><?= h($x['section']) ?></td>
-            <td><small><?= h(implode('; ', array_map(fn($v) => ($v['name'] ?? $v['id']) . ' — ' . money_fmt($v['price'] ?? null, (string)($v['currency'] ?? $x['currency'] ?? 'RUB')), $x['variants'] ?? []))) ?></small></td>
+            <td><small><?= isset($x['price']) && $x['price'] !== null ? '<b>' . h(money_fmt((float)$x['price'], $cur)) . '</b>' . (!empty($x['variants']) ? '; ' : '') : '' ?><?= h(implode('; ', array_map(fn($v) => ($v['name'] ?? $v['id']) . (isset($v['price']) && $v['price'] !== null ? ' — ' . money_fmt((float)$v['price'], (string)($v['currency'] ?? $cur)) : ''), $x['variants'] ?? []))) ?></small></td>
             <td><?= ($x['sale_mode'] ?? 'bot') === 'manager' ? 'менеджер' : 'бот' ?><?= product_sales_status($x) !== 'open' ? '<br><b class="bad">' . h(SALES_STATUSES[product_sales_status($x)]) . '</b>' : '' ?></td>
             <td class="nw"><?= h(fmt_dt($x['_updated'])) ?></td></tr>
         <?php endforeach; ?>
       </table>
-      <p><a href="?tab=catalog&id=new">+ Добавить товар</a></p>
+      <p><a href="?tab=catalog&id=new<?= $secSel !== '' ? '&sec=' . urlencode($secSel) : '' ?>">+ Добавить товар</a></p>
     </div>
-    <?php if (!$p) return; ?>
+
+    <div class="card">
+      <h2>Excel</h2>
+      <p class="hint">Листы: «Продукты» (по строке на товар), «Тарифы», «Характеристики» (строки — характеристики, колонки — коды товаров), «Опции», «Вопросы». Ячейки, начинающиеся с «?», — пометки для себя, бот их не видит. Товары с тем же кодом перезаписываются, остальные не трогаются.</p>
+      <p><a href="?tab=catalog&export=<?= urlencode($secSel) ?>">⬇ Скачать <?= $secSel !== '' ? 'раздел «' . h($secSel) . '»' : 'весь каталог' ?> (.xlsx)</a></p>
+      <form method="post" enctype="multipart/form-data" data-busy="Загружаю каталог…">
+        <?= csrf_field('catalog_import') ?>
+        <label>Файл .xlsx<input type="file" name="file" accept=".xlsx" required></label>
+        <label class="row"><input type="checkbox" name="prune" value="1"> Удалить из разделов файла товары, которых в файле нет</label>
+        <button>Загрузить</button>
+      </form>
+      <?php if ($rep): ?>
+        <p class="hint" style="margin-top:10px">Последняя загрузка: товаров <?= (int)$rep['products'] ?>, тарифов <?= (int)$rep['variants'] ?>, опций <?= (int)$rep['options'] ?>, вопросов <?= (int)$rep['questions'] ?>.</p>
+        <?php if ($rep['warnings']): ?><ul class="warn"><?php foreach ($rep['warnings'] as $w): ?><li><?= h($w) ?></li><?php endforeach; ?></ul><?php endif; ?>
+      <?php endif; ?>
+    </div>
+
+    <?php if ($secSel !== '' && !$p): $s = section_get($secSel); $users = section_users($secSel); ?>
+    <form method="post" class="card">
+      <?= csrf_field('section_save', ['code' => $secSel]) ?>
+      <h2>Раздел <code><?= h($secSel) ?></code></h2>
+      <p class="hint">Используют состояния: <?= $users ? h(implode(', ', $users)) : '<span class="bad">ни одно (в сценарии нет knowledge «catalog:' . h($secSel) . '»)</span>' ?>.
+        Вопросы — что бот выясняет у клиента, чтобы подобрать товар: задаёт по одному-два, только недостающие; ответы запоминает. Код — латиница (станет полем <code>q.<?= h($secSel) ?>.код</code>).</p>
+      <label>Название раздела<input name="name" value="<?= h($s['name']) ?>" placeholder="Зарубежные карты"></label>
+      <table class="vtab" id="qt">
+        <tr><th>Код</th><th>Вопрос клиенту</th><th>Варианты ответа</th><th>На что влияет</th><th></th></tr>
+        <?php foreach (array_merge($s['questions'], [[]]) as $q): ?>
+          <tr><td><input name="q[code][]" value="<?= h($q['code'] ?? '') ?>" style="width:110px"></td>
+            <td><textarea name="q[question][]" rows="2"><?= h($q['question'] ?? '') ?></textarea></td>
+            <td><textarea name="q[options][]" rows="2"><?= h($q['options'] ?? '') ?></textarea></td>
+            <td><textarea name="q[affects][]" rows="2"><?= h($q['affects'] ?? '') ?></textarea></td>
+            <td><button type="button" class="sec" onclick="this.closest('tr').remove()">✕</button></td></tr>
+        <?php endforeach; ?>
+      </table>
+      <button type="button" class="sec" onclick="addRow('qt')">+ вопрос</button>
+      <button>Сохранить раздел</button>
+    </form>
+    <?php endif; ?>
+
+    <?php if (!$p) { catalog_rows_script(); return; } $cur = (string)($p['currency'] ?? 'RUB'); ?>
     <form method="post" class="card">
       <?= csrf_field('catalog_save', ['orig_id' => $p['id']]) ?>
       <h2><?= $p['id'] === '' ? 'Новый товар' : h($p['name'] ?? $p['id']) ?></h2>
       <div class="grid">
         <label>Код (латиница)<input name="id" value="<?= h($p['id']) ?>" required pattern="[A-Za-z0-9_\-]{2,40}" title="Латиница, цифры, _ (2–40 символов). Заглавные станут строчными." oninput="this.value=this.value.toLowerCase().replace(/-/g,'_')"></label>
         <label>Название<input name="name" value="<?= h($p['name'] ?? '') ?>"></label>
-        <label>Раздел<input name="section" value="<?= h($p['section']) ?>" placeholder="cards / green_card / visa"></label>
-        <label>Валюта<select name="currency"><?php foreach (['RUB', 'USD', 'EUR'] as $cur): ?><option <?= ($p['currency'] ?? 'RUB') === $cur ? 'selected' : '' ?>><?= $cur ?></option><?php endforeach; ?></select></label>
+        <label>Раздел<input name="section" value="<?= h($p['section']) ?>" list="catsecs" placeholder="cards / green_card / visa"><datalist id="catsecs"><?php foreach ($secs as $s): ?><option value="<?= h($s['code']) ?>"><?php endforeach; ?></datalist></label>
+        <label>Наша цена<input name="price" value="<?= h(isset($p['price']) && $p['price'] !== null ? (string)$p['price'] : '') ?>" placeholder="пусто — уточнит менеджер"></label>
+        <label>Валюта<select name="currency"><?php foreach (['RUB', 'USD', 'EUR'] as $c): ?><option <?= $cur === $c ? 'selected' : '' ?>><?= $c ?></option><?php endforeach; ?></select></label>
         <label>Цена указана<select name="price_per"><option value="order">за заказ</option><option value="participant" <?= ($p['price_per'] ?? '') === 'participant' ? 'selected' : '' ?>>за каждого участника</option></select></label>
         <label>Кто продаёт<select name="sale_mode"><option value="bot">бот выставляет счёт</option><option value="manager" <?= ($p['sale_mode'] ?? '') === 'manager' ? 'selected' : '' ?>>менеджер (бот только консультирует)</option></select></label>
         <label>Порядок<input name="sort" value="<?= (int)($p['_sort'] ?? 100) ?>"></label>
         <label class="row" style="margin-top:28px"><input type="checkbox" name="active" value="1" <?= !empty($p['active']) ? 'checked' : '' ?>> Активен (бот предлагает)</label>
       </div>
-      <h2 style="margin-top:8px">Варианты / тарифы <small class="muted">— выбирается один</small></h2>
+      <div class="grid">
+        <label>Кому подходит<textarea name="fit" rows="3" style="font-family:inherit"><?= h($p['fit'] ?? '') ?></textarea></label>
+        <label>Ограничения / кому не подходит<textarea name="limits" rows="3" style="font-family:inherit"><?= h($p['limits'] ?? '') ?></textarea></label>
+        <label>Документы<textarea name="documents" rows="3" style="font-family:inherit"><?= h($p['documents'] ?? '') ?></textarea></label>
+        <label>Как оформляется<textarea name="process" rows="3" style="font-family:inherit"><?= h($p['process'] ?? '') ?></textarea></label>
+      </div>
+      <label>Характеристики — по строке «Название: значение» (платёжная система, валюты, кешбэк, бизнес-залы, пополнение…)<textarea name="props" rows="6"><?= h(props_text($p['props'] ?? [])) ?></textarea></label>
+      <h2 style="margin-top:8px">Тарифы <small class="muted">— выбирается один; пустая цена = наша цена товара</small></h2>
       <table class="vtab" id="vt">
-        <tr><th>Код</th><th>Название</th><th>Цена</th><th>Валюта</th><th>Срок</th><th>Что входит</th><th></th></tr>
+        <tr><th>Код</th><th>Название</th><th>Наша цена</th><th>Валюта</th><th>Плата банку</th><th>Характеристики тарифа («Название: значение»)</th><th></th></tr>
         <?php foreach (array_merge($p['variants'] ?? [], [[]]) as $v): ?>
-          <tr><td><input name="v[id][]" value="<?= h($v['id'] ?? '') ?>" style="width:110px"></td><td><input name="v[name][]" value="<?= h($v['name'] ?? '') ?>"></td>
-            <td><input name="v[price][]" value="<?= h(isset($v['price']) && $v['price'] !== null ? (string)$v['price'] : '') ?>" style="width:90px" placeholder="пусто"></td>
+          <tr><td><input name="v[id][]" value="<?= h($v['id'] ?? '') ?>" style="width:100px"></td><td><input name="v[name][]" value="<?= h($v['name'] ?? '') ?>"></td>
+            <td><input name="v[price][]" value="<?= h(isset($v['price']) && $v['price'] !== null ? (string)$v['price'] : '') ?>" style="width:90px" placeholder="как у товара"></td>
             <td><input name="v[currency][]" value="<?= h($v['currency'] ?? '') ?>" style="width:55px" placeholder="—"></td>
-            <td><input name="v[term][]" value="<?= h($v['term'] ?? '') ?>" style="width:110px"></td><td><input name="v[includes][]" value="<?= h($v['includes'] ?? '') ?>"></td>
+            <td><input name="v[bank_fee][]" value="<?= h($v['bank_fee'] ?? '') ?>" style="width:120px"></td>
+            <td><textarea name="v[props][]" rows="2"><?= h(variant_props_text($v)) ?></textarea></td>
             <td><button type="button" class="sec" onclick="this.closest('tr').remove()">✕</button></td></tr>
         <?php endforeach; ?>
       </table>
-      <button type="button" class="sec" onclick="addRow('vt')">+ вариант</button>
+      <button type="button" class="sec" onclick="addRow('vt')">+ тариф</button>
       <h2 style="margin-top:14px">Опции <small class="muted">— можно несколько</small></h2>
       <table class="vtab" id="ot">
-        <tr><th>Код</th><th>Название</th><th>Тип</th><th>Надбавка</th><th>Значения (для «выбор»)</th><th></th></tr>
+        <tr><th>Код</th><th>Название</th><th>Тип</th><th>Наша надбавка</th><th>Плата банку</th><th>Значения (для «выбор»)</th><th></th></tr>
         <?php foreach (array_merge($p['options'] ?? [], [[]]) as $o): ?>
-          <tr><td><input name="o[id][]" value="<?= h($o['id'] ?? '') ?>" style="width:110px"></td><td><input name="o[name][]" value="<?= h($o['name'] ?? '') ?>"></td>
+          <tr><td><input name="o[id][]" value="<?= h($o['id'] ?? '') ?>" style="width:100px"></td><td><input name="o[name][]" value="<?= h($o['name'] ?? '') ?>"></td>
             <td><select name="o[type][]"><option value="addon">доплата</option><option value="choice" <?= ($o['type'] ?? '') === 'choice' ? 'selected' : '' ?>>выбор</option></select></td>
-            <td><input name="o[price_delta][]" value="<?= h(isset($o['price_delta']) && $o['price_delta'] !== null ? (string)$o['price_delta'] : '') ?>" style="width:90px" placeholder="пусто"></td>
+            <td><input name="o[price_delta][]" value="<?= h(isset($o['price_delta']) && $o['price_delta'] !== null ? (string)$o['price_delta'] : '') ?>" style="width:90px" placeholder="0"></td>
+            <td><input name="o[bank_fee][]" value="<?= h($o['bank_fee'] ?? '') ?>" style="width:120px"></td>
             <td><input name="o[values][]" value="<?= h(implode(', ', (array)($o['values'] ?? []))) ?>" placeholder="RUB, USD"></td>
             <td><button type="button" class="sec" onclick="this.closest('tr').remove()">✕</button></td></tr>
         <?php endforeach; ?>
@@ -431,23 +523,28 @@ function view_catalog(): void
       <div class="grid">
         <label>Статус продаж<select name="sales_status"><?php foreach (SALES_STATUSES as $k => $v): ?><option value="<?= $k ?>" <?= ($p['sales_status'] ?? 'open') === $k ? 'selected' : '' ?>><?= h($v) ?></option><?php endforeach; ?></select></label>
       </div>
-      <p class="hint">«Активен» — бот знает о товаре; «Статус продаж» — можно ли продавать. На паузе бот один раз отправляет объявление дословно, отвечает на вопросы по подробностям, счёт и анкету не выдаёт, предлагает сообщить о возобновлении и возвращает разговор к другим услугам. Включить обратно — статус «продажи открыты».</p>
+      <p class="hint">«Активен» — бот знает о товаре; «Статус продаж» — можно ли продавать. На паузе бот один раз отправляет объявление дословно, отвечает по подробностям, счёт и анкету не выдаёт и предлагает другие варианты. Если на паузе часть товаров раздела — бот подбирает из остальных; если все — возвращает разговор к другим услугам.</p>
       <label>Объявление (отправляется клиенту слово в слово)<textarea name="pause_notice" rows="4" style="font-family:inherit"><?= h($p['pause_notice'] ?? '') ?></textarea></label>
       <label>Подробности для ответов на вопросы во время паузы<textarea name="pause_details" rows="6" style="font-family:inherit"><?= h($p['pause_details'] ?? '') ?></textarea></label>
-      <label style="margin-top:14px">Для бота — описание, что входит, условия, ограничения<textarea name="bot_info" rows="5" style="font-family:inherit"><?= h($p['bot_info'] ?? '') ?></textarea></label>
-      <label>Параметры (JSON) — период регистрации, акции и т. п.<textarea name="params" rows="6"><?= h($p['params'] ? json_encode($p['params'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) : '') ?></textarea></label>
+      <label style="margin-top:14px">Для бота — что ещё важно знать о товаре<textarea name="bot_info" rows="5" style="font-family:inherit"><?= h($p['bot_info'] ?? '') ?></textarea></label>
+      <label>Параметры (JSON) — период регистрации, акции и т. п.<textarea name="params" rows="6"><?= h(!empty($p['params']) ? json_encode($p['params'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) : '') ?></textarea></label>
       <button>Сохранить</button>
     </form>
     <?php if ($p['id'] !== ''): ?>
       <form method="post" class="inline" onsubmit="return confirm('Удалить товар из каталога?')"><?= csrf_field('catalog_delete', ['id' => $p['id']]) ?><button class="danger">Удалить товар</button></form>
     <?php endif; ?>
-    <script>
+    <?php
+    catalog_rows_script();
+}
+
+function catalog_rows_script(): void
+{
+    ?><script>
     function addRow(id) {
       const t = document.getElementById(id), last = t.rows[t.rows.length - 1], r = last.cloneNode(true);
-      r.querySelectorAll('input').forEach(i => i.value = ''); t.tBodies[0].appendChild(r);
+      r.querySelectorAll('input,textarea').forEach(i => i.value = ''); t.tBodies[0].appendChild(r);
     }
-    </script>
-    <?php
+    </script><?php
 }
 
 /* ------------------------------------------------------------------ */
@@ -480,6 +577,27 @@ function view_docs(array $view): void
         <?php endforeach; ?>
       </table>
     </div>
+    <?php
+    $noteId = (int)($_GET['note'] ?? 0);
+    $note = ['id' => 0, 'title' => '', 'section' => '', 'body' => '', 'trust' => 'main'];
+    if ($noteId > 0) {
+        $st = db()->prepare("SELECT * FROM documents WHERE id = ? AND format = 'note'");
+        $st->execute([$noteId]);
+        $note = $st->fetch() ?: $note;
+    }
+    ?>
+    <form method="post" class="card" id="note" data-busy="Сохраняю…">
+      <?= csrf_field('note_save', ['id' => (int)$note['id']]) ?>
+      <h2><?= $note['id'] ? 'Заметка «' . h($note['title']) . '»' : 'Новая заметка' ?></h2>
+      <p class="hint">Текст прямо здесь — например, справка по банку или ответ на частый вопрос. Можно править в любой момент, бот сразу видит изменения. Заголовки «# …» делят длинную заметку на части.</p>
+      <div class="grid">
+        <label>Раздел<input name="section" list="secs" required value="<?= h($note['section']) ?>" placeholder="cards/mbank"></label>
+        <label>Название<input name="title" required value="<?= h($note['title']) ?>"></label>
+      </div>
+      <label>Текст<textarea name="text" rows="12" style="font-family:inherit" required><?= h($note['body'] ?? '') ?></textarea></label>
+      <label>Доверие<select name="trust"><option value="main">Проверенный</option><option value="aux" <?= ($note['trust'] ?? '') === 'aux' ? 'selected' : '' ?>>Вспомогательный</option></select></label>
+      <button>Сохранить</button><?php if ($note['id']): ?> <a href="?tab=docs#note">отмена</a><?php endif; ?>
+    </form>
     <form method="post" enctype="multipart/form-data" class="card" data-busy="Индексирую… не закрывайте страницу">
       <?= csrf_field('upload') ?>
       <h2>Загрузить материал</h2>
@@ -500,7 +618,7 @@ function view_docs(array $view): void
         <?php foreach ($docs as $d): ?>
           <tr class="<?= $d['active'] ? '' : 'off' ?>">
             <td><form method="post" style="display:flex;gap:4px"><?= csrf_field('doc_section', ['id' => $d['id']]) ?><input name="section" value="<?= h($d['section']) ?>" list="secs" style="width:140px;padding:4px 6px"><button class="sec" style="margin:0;padding:3px 8px">✓</button></form></td>
-            <td><?= h($d['title']) ?> <small class="muted"><?= h(strtoupper($d['format'])) ?></small></td><td><?= (int)$d['chunks'] ?></td>
+            <td><?= $d['format'] === 'note' ? '<a href="?tab=docs&note=' . (int)$d['id'] . '#note">' . h($d['title']) . '</a> <small class="muted">заметка</small>' : h($d['title']) . ' <small class="muted">' . h(strtoupper($d['format'])) . '</small>' ?></td><td><?= (int)$d['chunks'] ?></td>
             <td><?= $d['trust'] === 'aux' ? 'вспомог.' : 'проверен.' ?></td><td class="nw"><?= h(fmt_dt($d['created_at'], 'd.m.Y')) ?></td>
             <td class="act">
               <form method="post"><?= csrf_field('doc_toggle', ['id' => $d['id']]) ?><button class="sec"><?= $d['active'] ? 'Выкл' : 'Вкл' ?></button></form>

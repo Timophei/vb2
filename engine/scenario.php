@@ -21,12 +21,13 @@ const SLOT_TYPES = ['string', 'phone', 'contact', 'enum', 'int', 'bool', 'fio', 
 /** События, которые генерирует сам движок или админка. */
 const SYSTEM_EVENTS = ['client_message', 'operator_message', 'turn_limit_exceeded', 'invoice_sent', 'payment.paid', 'payment.failed', 'payment_timeout', 'manager_took_over', 'followup_due', 'bot_answered_question'];
 
-function scenario_from_row(array $row): array
+function scenario_from_row(array $row, bool $withQuestions = true): array
 {
     $sc = json_decode($row['json'], true);
     if (!is_array($sc)) throw new RuntimeException('Сценарий #' . $row['id'] . ' повреждён');
     // встроенные поля клиента — есть в любом сценарии (ФИО, e-mail, мессенджер для контакта в CRM)
     foreach (BUILTIN_SLOTS as $k => $def) $sc['slots'][$k] ??= $def;
+    if ($withQuestions) scenario_add_section_questions($sc);
     $sc['_id'] = (int)$row['id'];
     $sc['_version'] = $row['version'];
     return $sc;
@@ -34,12 +35,18 @@ function scenario_from_row(array $row): array
 
 function scenario_by_id(int $id): ?array
 {
+    // разбор JSON кешируется на процесс (воркер живёт долго), вопросы разделов каталога — всегда свежие из админки
     static $cache = [];
-    if (isset($cache[$id])) return $cache[$id];
-    $st = db()->prepare('SELECT * FROM scenarios WHERE id = ?');
-    $st->execute([$id]);
-    $row = $st->fetch();
-    return $row ? ($cache[$id] = scenario_from_row($row)) : null;
+    if (!isset($cache[$id])) {
+        $st = db()->prepare('SELECT * FROM scenarios WHERE id = ?');
+        $st->execute([$id]);
+        $row = $st->fetch();
+        if (!$row) return null;
+        $cache[$id] = scenario_from_row($row, false);
+    }
+    $sc = $cache[$id];
+    scenario_add_section_questions($sc);
+    return $sc;
 }
 
 function scenario_active(): array
@@ -241,4 +248,28 @@ function scenario_todos(array $sc): array
     };
     $walk($sc, '');
     return $out;
+}
+
+/**
+ * Вопросы для подбора из разделов каталога → поля для ответов (слоты q.<раздел>.<код>).
+ * Состояния, которые продают раздел (knowledge: catalog:<раздел>), получают их как желательные к выяснению.
+ * Сценарий не меняется — вопросы правятся в админке, на странице раздела.
+ */
+function scenario_add_section_questions(array &$sc): void
+{
+    try { $sections = sections_all(); } catch (Throwable $e) { return; }
+    foreach ($sections as $sec) {
+        if (!$sec['questions']) continue;
+        $names = [];
+        foreach ($sec['questions'] as $q) {
+            $slot = section_question_slot($sec['code'], $q['code']);
+            $names[] = $slot;
+            $sc['slots'][$slot] ??= ['type' => 'string', 'label' => $q['question'], 'question' => true, 'section' => $sec['code'],
+                '_note' => trim(($q['options'] !== '' ? 'варианты: ' . $q['options'] . '. ' : '') . 'Запиши ответ клиента своими словами кратко.')];
+        }
+        foreach ($sc['states'] as $k => $st) {
+            if (!in_array('catalog:' . $sec['code'], (array)($st['knowledge'] ?? []), true)) continue;
+            $sc['states'][$k]['section_questions'][$sec['code']] = $sec['questions'];
+        }
+    }
 }

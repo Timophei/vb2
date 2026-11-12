@@ -120,3 +120,7 @@ table.states td{font-size:13px}
 .vtab button{margin:0;padding:4px 9px;font-size:13px}
 .muted{color:var(--muted)}
 .inline-btn{display:inline;margin:0}.inline-btn button{margin:0 0 0 6px;padding:3px 9px;font-size:12px}
+.tabs-inline{font-size:14px;line-height:1.9}
+.tabs-inline a.on{font-weight:600;color:inherit;text-decoration:none}
+ul.warn{padding-left:28px}
+.vtab textarea{width:100%;min-width:180px;font:inherit;font-size:13px}

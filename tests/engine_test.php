@@ -424,6 +424,43 @@ check(state($dlg) === 'closed', '«нет, спасибо» → закрыто')
 say($dlg, 'здравствуйте снова');
 check(state($dlg) === 'greeting', 'пишет снова → новый круг с приветствия');
 
+echo "\n6. Каталог карт из Excel: импорт, цены тарифов, вопросы подбора, частичная пауза, заметки\n";
+$rep = catalog_import_xlsx(__DIR__ . '/../scenarios/cards_catalog_draft.xlsx', true);
+check($rep['products'] === 6 && $rep['variants'] >= 10 && $rep['questions'] >= 8, "импорт черновика: товаров {$rep['products']}, тарифов {$rep['variants']}, опций {$rep['options']}, вопросов {$rep['questions']}");
+$mb = catalog_get('mbank');
+check($mb && (float)$mb['price'] === 36000.0 && count($mb['variants']) === 3, 'M Bank: наша цена 36 000, три тарифа');
+$pr = catalog_price('mbank', 'platinum');
+check(($pr['amount'] ?? null) == 36000, 'тариф без своей цены — берётся наша цена товара');
+$props = array_column(props_norm($mb['props']), 1, 0);
+check(($props['Исходящий SWIFT'] ?? '') !== '' && !array_filter($props, fn($v) => str_starts_with($v, '?')), 'характеристики из матрицы, пометки «?» не попали');
+check(product_sales_status(catalog_get('visa_virtual')) === 'paused', 'VISA Virtual — на паузе');
+$xl = "$tmp/export.xlsx";
+xlsx_write($xl, catalog_export_rows('cards'));
+$rep2 = catalog_import_xlsx($xl);
+check($rep2['products'] === 6 && $rep2['variants'] === $rep['variants'] && $rep2['questions'] === $rep['questions'], 'экспорт → импорт: то же самое');
+check((float)catalog_get('mbank')['price'] === 36000.0 && catalog_price('mbank', 'gold')['amount'] == 36000, 'после круга цены те же');
+
+$GLOBALS['CLS'] = ['хочу зарубежную карту' => ['cards', []], 'давайте VISA Virtual' => ['cards', ['cards.product_id' => 'visa_virtual']]];
+$GLOBALS['TOOLS'] = [];
+$dlg = new_dialog('web:cards1');
+$out = say($dlg, 'хочу зарубежную карту');
+check(state($dlg) === 'cards', 'часть карт на паузе — этап «Карты» работает');
+check(str_contains($GLOBALS['LAST_PROMPT'], '## Подбор: вопросы клиенту') && str_contains($GLOBALS['LAST_PROMPT'], 'С какого банка вам удобно пополнять'), 'в промпте вопросы для подбора');
+check(str_contains($GLOBALS['LAST_PROMPT'], 'M Bank') && !str_contains($GLOBALS['LAST_PROMPT'], 'VISA Virtual Card'), 'паузный товар модель не видит, остальные видит');
+$sc2 = scenario_active();
+check(isset($sc2['slots']['q.cards.topup']), 'ответы на вопросы — поля q.cards.*');
+$out = say($dlg, 'давайте VISA Virtual');
+check(in_array('Временно не выпускаем.', $out, true) && state($dlg) === 'cards', 'выбрал паузный товар — объявление, остаёмся подбирать из остальных');
+check(empty(dialog_load($dlg)['slots']['cards.product_id']), 'выбор паузного товара сброшен');
+$out = say($dlg, 'давайте VISA Virtual');
+check(!in_array('Временно не выпускаем.', $out, true), 'объявление второй раз не отправляется');
+
+$nid = save_note(0, 'M Bank — частые вопросы', 'cards/mbank', "# Пополнение\nПополнять удобнее всего через Т-Банк по реквизитам, без комиссии.");
+check(retrieve('пополнение реквизиты', ['cards']) !== [], 'заметка находится поиском');
+save_note($nid, 'M Bank — частые вопросы', 'cards/mbank', "# Пополнение\nЗачисление занимает до одного рабочего дня, лимит 5000 долларов.");
+$hits = retrieve('зачисление лимит', ['cards/mbank']);
+check($hits && str_contains($hits[0]['text'], 'одного рабочего дня') && !retrieve('Т-Банк реквизиты комиссии', ['cards/mbank']), 'правка заметки заменяет старый текст');
+
 echo "\n5. Песочница не пишет в Битрикс\n";
 $GLOBALS['CLS'] = ['я на вакансию водителя, Сидоров Пётр, 89140000000, резюме нет' => ['jobs', ['jobs.position' => 'водитель', 'jobs.full_name' => 'Сидоров / Пётр / ', 'contact' => '89140000000', 'jobs.no_resume' => 'true']]];
 $GLOBALS['B24'] = [];

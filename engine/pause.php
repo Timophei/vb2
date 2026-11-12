@@ -39,9 +39,35 @@ function state_products(array $T, string $state): array
     return $out;
 }
 
+/** Товары состояния не на продаже — только если не продаётся НИ ОДИН (тогда этап целиком недоступен). */
 function paused_products_for_state(array $T, string $state): array
 {
-    return array_filter(state_products($T, $state), fn($p) => product_sales_status($p) !== 'open');
+    $all = state_products($T, $state);
+    $paused = array_filter($all, fn($p) => product_sales_status($p) !== 'open');
+    return $all && count($paused) === count($all) ? $paused : [];
+}
+
+/**
+ * Часть товаров раздела на паузе: этап работает, паузные модель не видит.
+ * Клиент назвал конкретный паузный товар (слот catalog_ref) — объявление (один раз) и блок паузы в промпте,
+ * выбор сбрасывается, модель предлагает альтернативы.
+ */
+function pause_check_selected(array &$T): void
+{
+    foreach ($T['d']['slots'] as $name => $v) {
+        if ((sc_slot($T['sc'], $name)['type'] ?? '') !== 'catalog_ref' || !is_string($v) || $v === '') continue;
+        [$pid] = explode(':', $v) + [''];
+        $p = catalog_get($pid);
+        if (!$p || product_sales_status($p) === 'open') continue;
+        if (empty($T['d']['counters']['notice_shown.' . $pid])) {
+            $notice = trim((string)($p['pause_notice'] ?? '')) ?: ('«' . ($p['name'] ?? $pid) . '» сейчас ' . SALES_STATUSES[product_sales_status($p)] . '.');
+            $T['notice'][] = $notice;
+            $T['d']['counters']['notice_shown.' . $pid] = 1;
+            action_log($T, 'pause_notice', ['товар' => $pid], 'клиент выбрал товар не на продаже — объявление');
+        }
+        $T['d']['counters']['pause_ctx'] = $pid;
+        unset($T['d']['slots'][$name]);
+    }
 }
 
 /** Товары текущего «контекста паузы» (по которым клиент спрашивал). */
@@ -75,7 +101,9 @@ function pause_check(array &$T): void
     $paused = paused_products_for_state($T, $state);
     if (!$paused) {
         // ушли в другую ветку продаж — контекст паузы больше не нужен
-        if ($state !== $entry && $state !== ae_state($sc) && sc_state_type($sc, $state) === 'conversation') unset($T['d']['counters']['pause_ctx']);
+        $ctx = array_keys(pause_ctx_products($T));
+        $here = array_keys(state_products($T, $state));
+        if ($state !== $entry && $state !== ae_state($sc) && sc_state_type($sc, $state) === 'conversation' && !array_intersect($ctx, $here)) unset($T['d']['counters']['pause_ctx']);
         return;
     }
     // сюда попадаем, только если вошли в состояние мимо переходов (например, вручную из админки)

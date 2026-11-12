@@ -88,6 +88,24 @@ function index_file(string $path, string $origName, string $title, string $secti
     $pdo->prepare('INSERT INTO documents(title, filename, section, pages, chunks, has_embeddings, trust, format, active) VALUES(?,?,?,?,?,?,?,?,0)')
         ->execute([$title, basename($path), $section, $pages, $total, $useEmb ? 1 : 0, $trust === 'aux' ? 'aux' : 'main', strtolower(pathinfo($origName, PATHINFO_EXTENSION))]);
     $docId = (int)$pdo->lastInsertId();
+    try {
+        kb_insert_chunks($docId, $title, $chunks, $log);
+    } catch (Throwable $e) {
+        delete_document($docId);
+        throw $e;
+    }
+    $pdo->prepare('UPDATE documents SET active = 1 WHERE id = ?')->execute([$docId]);
+    $log($pages . ' разделов, ' . $total . ' фрагментов');
+    return $docId;
+}
+
+/** Фрагменты документа в базу: текст, полнотекстовый индекс, эмбеддинги. */
+function kb_insert_chunks(int $docId, string $title, array $chunks, ?callable $log = null): void
+{
+    $log ??= fn($m) => null;
+    $useEmb = (bool)cfg('use_embeddings', true);
+    $total = count($chunks);
+    $pdo = db();
     $ins = $pdo->prepare('INSERT INTO chunks(doc_id, page, source, text, embedding) VALUES(?,?,?,?,?)');
     $fts = $pdo->prepare('INSERT INTO chunks_fts(rowid, text) VALUES(?, ?)');
     try {
@@ -113,12 +131,35 @@ function index_file(string $path, string $origName, string $title, string $secti
         }
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
-        delete_document($docId);
         throw $e;
     }
-    $pdo->prepare('UPDATE documents SET active = 1 WHERE id = ?')->execute([$docId]);
-    $log($pages . ' разделов, ' . $total . ' фрагментов');
-    return $docId;
+}
+
+/**
+ * Текстовая заметка из админки: создать ($id = 0) или обновить с переиндексацией.
+ * Текст хранится в documents.body — его можно править. Заголовки «# …» делят заметку на разделы.
+ */
+function save_note(int $id, string $title, string $section, string $text, string $trust = 'main'): int
+{
+    $text = trim(str_replace("\r\n", "\n", $text));
+    $title = trim($title);
+    if ($title === '' || $text === '') throw new RuntimeException('Нужны заголовок и текст.');
+    $section = normalize_section($section);
+    $chunks = make_chunks(extract_markdown($text));
+    if (!$chunks) throw new RuntimeException('Слишком короткий текст.');
+    $pdo = db();
+    if ($id > 0) {
+        $pdo->prepare('DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE doc_id = ?)')->execute([$id]);
+        $pdo->prepare('DELETE FROM chunks WHERE doc_id = ?')->execute([$id]);
+        $pdo->prepare("UPDATE documents SET title = ?, section = ?, body = ?, chunks = ?, pages = 1, trust = ?, has_embeddings = ? WHERE id = ? AND format = 'note'")
+            ->execute([$title, $section, $text, count($chunks), $trust === 'aux' ? 'aux' : 'main', cfg('use_embeddings', true) ? 1 : 0, $id]);
+    } else {
+        $pdo->prepare("INSERT INTO documents(title, filename, section, format, trust, pages, chunks, has_embeddings, active, body) VALUES(?, '', ?, 'note', ?, 1, ?, ?, 1, ?)")
+            ->execute([$title, $section, $trust === 'aux' ? 'aux' : 'main', count($chunks), cfg('use_embeddings', true) ? 1 : 0, $text]);
+        $id = (int)$pdo->lastInsertId();
+    }
+    kb_insert_chunks($id, $title, $chunks);
+    return $id;
 }
 
 function delete_document(int $id): void

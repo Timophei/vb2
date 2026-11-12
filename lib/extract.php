@@ -186,22 +186,22 @@ function extract_csv(string $path): array
     return rows_to_segment($rows, '');
 }
 
-function extract_xlsx(string $path): array
+/** Листы XLSX: [имя листа => строки (массивы значений)]. */
+function xlsx_sheets(string $path): array
 {
     $zip = new ZipArchive();
     if ($zip->open($path) !== true) throw new RuntimeException('Не удалось открыть XLSX.');
-
+    $text = function ($node): string {
+        if ($node === null) return '';
+        $t = isset($node->t) ? (string)$node->t : '';
+        if (isset($node->r)) foreach ($node->r as $r) $t .= (string)$r->t;
+        return $t;
+    };
     $shared = [];
     if (($ss = $zip->getFromName('xl/sharedStrings.xml')) !== false) {
         $x = simplexml_load_string($ss);
-        foreach ($x->si as $si) {
-            $t = '';
-            if (isset($si->t)) $t = (string)$si->t;
-            foreach ($si->r as $r) $t .= (string)$r->t;
-            $shared[] = $t;
-        }
+        foreach ($x->si as $si) $shared[] = $text($si);
     }
-    // имена листов и пути к ним
     $sheets = [];
     $wb = simplexml_load_string((string)$zip->getFromName('xl/workbook.xml'));
     $rels = simplexml_load_string((string)$zip->getFromName('xl/_rels/workbook.xml.rels'));
@@ -211,7 +211,6 @@ function extract_xlsx(string $path): array
         $rid = (string)$s->attributes('http://schemas.openxmlformats.org/officeDocument/2006/relationships')['id'];
         if (isset($target[$rid])) $sheets[(string)$s['name']] = $target[$rid];
     }
-
     $out = [];
     foreach ($sheets as $name => $file) {
         $xml = $zip->getFromName($file);
@@ -225,17 +224,29 @@ function extract_xlsx(string $path): array
                 $col = 0;
                 foreach (str_split($m[1] ?? 'A') as $ch) $col = $col * 26 + ord($ch) - 64;
                 $type = (string)$c['t'];
-                $v = $type === 's' ? ($shared[(int)$c->v] ?? '') : ($type === 'inlineStr' ? (string)$c->is->t : (string)$c->v);
+                $v = $type === 's' ? ($shared[(int)$c->v] ?? '') : ($type === 'inlineStr' ? $text($c->is) : (string)$c->v);
                 $r[$col - 1] = $v;
             }
             if ($r) {
                 $max = max(array_keys($r));
                 $rows[] = array_map(fn($i) => $r[$i] ?? '', range(0, $max));
+            } else {
+                $rows[] = [];
             }
         }
-        foreach (rows_to_segment($rows, 'лист «' . $name . '»') as $s) $out[] = $s;
+        $out[$name] = $rows;
     }
     $zip->close();
+    return $out;
+}
+
+function extract_xlsx(string $path): array
+{
+    $out = [];
+    foreach (xlsx_sheets($path) as $name => $rows) {
+        $rows = array_values(array_filter($rows, fn($r) => $r !== []));
+        foreach (rows_to_segment($rows, 'лист «' . $name . '»') as $s) $out[] = $s;
+    }
     return $out;
 }
 

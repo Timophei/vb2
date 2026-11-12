@@ -467,6 +467,7 @@ function engine_message(int $dialogId, string $text, ?array $attachment = null):
     $max = (int)(sc_state($T['sc'], $T['d']['state'])['max_turns'] ?? 0);
     if ($max > 0 && $T['d']['state_turns'] > $max) eval_transitions($T, ['event' => 'turn_limit_exceeded']);
 
+    pause_check_selected($T); // выбран конкретный товар не на продаже — объявление, альтернативы
     pause_check($T); // товар этапа не продаётся → объявление и назад к выявлению потребности
     return engine_finish($T, true, $text);
 }

@@ -89,6 +89,16 @@ $tab = (string)($_GET['tab'] ?? 'dialogs');
 $flash = $_SESSION['flash'] ?? ''; unset($_SESSION['flash']);
 $view = []; // данные для отображения после POST без редиректа (проверка сценария)
 
+if ($tab === 'catalog' && isset($_GET['export'])) {
+    $sec = (string)$_GET['export'];
+    $tmp = tempnam(sys_get_temp_dir(), 'cat');
+    xlsx_write($tmp, catalog_export_rows($sec === '' ? null : $sec));
+    header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    header('Content-Disposition: attachment; filename="catalog_' . ($sec === '' ? 'all' : preg_replace('/[^\w-]/', '_', $sec)) . '_' . date('Ymd') . '.xlsx"');
+    header('Content-Length: ' . filesize($tmp));
+    readfile($tmp); @unlink($tmp); exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!$_POST && !$_FILES && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) go('tab=' . $tab, 'Ошибка: файл больше лимита сервера (' . upload_limit_text() . ').');
     if (!hash_equals(csrf(), (string)($_POST['csrf'] ?? ''))) { http_response_code(400); exit('CSRF'); }
@@ -206,6 +216,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             case 'catalog_delete':
                 catalog_delete((string)$_POST['id']);
                 go('tab=catalog', 'Товар удалён.');
+            case 'section_save':
+                $code = normalize_section((string)($_POST['code'] ?? ''));
+                if ($code === '') throw new RuntimeException('Нужен код раздела.');
+                $qs = [];
+                $q = (array)($_POST['q'] ?? []);
+                foreach ((array)($q['code'] ?? []) as $i => $c) $qs[] = ['code' => $c, 'question' => $q['question'][$i] ?? '', 'options' => $q['options'][$i] ?? '', 'affects' => $q['affects'][$i] ?? ''];
+                section_save($code, (string)($_POST['name'] ?? ''), $qs);
+                go('tab=catalog&sec=' . urlencode($code), 'Раздел «' . $code . '» сохранён. Вопросы подхватятся в новых ходах диалога.');
+            case 'catalog_import':
+                $f = $_FILES['file'] ?? null;
+                if (!$f || $f['error'] !== UPLOAD_ERR_OK) throw new RuntimeException('Файл не загрузился (код ' . ($f['error'] ?? '?') . ').');
+                if (strtolower(pathinfo($f['name'], PATHINFO_EXTENSION)) !== 'xlsx') throw new RuntimeException('Нужен файл .xlsx.');
+                $rep = catalog_import_xlsx($f['tmp_name'], !empty($_POST['prune']));
+                $_SESSION['import_report'] = $rep;
+                go('tab=catalog', "Загружено: товаров {$rep['products']}, тарифов {$rep['variants']}, опций {$rep['options']}, вопросов {$rep['questions']}"
+                    . ($rep['removed'] ? '; удалено: ' . implode(', ', $rep['removed']) : '') . '.');
 
             /* --- материалы --- */
             case 'upload':
@@ -241,6 +267,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($fn = $st->fetchColumn()) @unlink(data_dir() . '/files/' . basename($fn));
                 delete_document((int)$_POST['id']);
                 go('tab=docs', 'Удалено.');
+            case 'note_save':
+                $nid = save_note((int)($_POST['id'] ?? 0), (string)$_POST['title'], (string)$_POST['section'], (string)$_POST['text'], (string)($_POST['trust'] ?? 'main'));
+                go('tab=docs&note=' . $nid, 'Заметка сохранена — бот уже видит новый текст.');
             case 'kb_test':
                 $view['kb_q'] = (string)$_POST['q'];
                 $view['kb_sections'] = (string)$_POST['sections'];

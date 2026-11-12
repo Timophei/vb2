@@ -14,6 +14,7 @@ require_once __DIR__ . '/extract.php';
 require_once __DIR__ . '/kb.php';
 require_once __DIR__ . '/clients.php';
 require_once __DIR__ . '/catalog.php';
+require_once __DIR__ . '/catalog_io.php';
 require_once __DIR__ . '/telegram.php';
 require_once __DIR__ . '/bitrix.php';
 require_once __DIR__ . '/b24map.php';
@@ -236,6 +237,9 @@ function migrate(PDO $pdo): void
     $cols = array_column($pdo->query('PRAGMA table_info(dialogs)')->fetchAll(), 'name');
     if (!in_array('deal_id', $cols, true)) $pdo->exec('ALTER TABLE dialogs ADD COLUMN deal_id INTEGER NOT NULL DEFAULT 0');
     if (!in_array('contact_id', $cols, true)) $pdo->exec('ALTER TABLE dialogs ADD COLUMN contact_id INTEGER NOT NULL DEFAULT 0');
+    // текстовые заметки базы знаний (правятся в админке) и разделы каталога
+    if (!in_array('body', array_column($pdo->query('PRAGMA table_info(documents)')->fetchAll(), 'name'), true)) $pdo->exec('ALTER TABLE documents ADD COLUMN body TEXT');
+    $pdo->exec("CREATE TABLE IF NOT EXISTS catalog_sections (code TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', questions TEXT NOT NULL DEFAULT '[]', sort INTEGER NOT NULL DEFAULT 100)");
 }
 
 /* ------------------------------------------------------------------ */
