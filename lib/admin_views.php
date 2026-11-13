@@ -31,10 +31,12 @@ function view_dialogs(): void
       <h2>Диалоги (<?= count($list) ?>)</h2>
       <p class="hint">Время — <?= h(tz_label()) ?>. Песочница по умолчанию скрыта.</p>
       <?php if (!$list): ?><p class="hint">Пока нет диалогов.</p><?php else: ?>
+      <form method="post" id="exp"><?= csrf_field('dlg_export') ?></form>
       <table class="clients">
-        <tr><th>Клиент</th><th>Канал</th><th>Состояние</th><th>Последнее сообщение</th><th>Сообщ.</th><th>Обновлён</th></tr>
+        <tr><th class="chk"><input type="checkbox" id="chkall" title="Выделить все" onclick="document.querySelectorAll('input.dchk').forEach(c => c.checked = this.checked); expCount()"></th><th>Клиент</th><th>Канал</th><th>Состояние</th><th>Последнее сообщение</th><th>Сообщ.</th><th>Обновлён</th></tr>
         <?php foreach ($list as $d): $dsc = scenario_for($d); ?>
           <tr onclick="location='?tab=dialogs&id=<?= (int)$d['id'] ?>'">
+            <td class="chk" onclick="event.stopPropagation()"><input type="checkbox" class="dchk" name="ids[]" value="<?= (int)$d['id'] ?>" form="exp" onchange="expCount()"></td>
             <td><a href="?tab=dialogs&id=<?= (int)$d['id'] ?>"><?= h(client_display_name($d + ['client_id' => $d['client_id']])) ?></a><br><small class="muted">#<?= (int)$d['id'] ?></small></td>
             <td class="nw"><?= h(CHANNEL_NAMES[$d['channel']] ?? $d['channel']) ?></td>
             <td><span class="badge t-<?= h(sc_state_type($dsc, $d['state'])) ?>"><?= h(sc_state_title($dsc, $d['state'])) ?></span>
@@ -44,7 +46,20 @@ function view_dialogs(): void
             <td class="nw"><?= h(fmt_dt($d['last_at'])) ?></td>
           </tr>
         <?php endforeach; ?>
-      </table><?php endif; ?>
+      </table>
+      <div class="expbar">
+        <button form="exp" id="expbtn" disabled>Скачать выделенные (.zip)</button>
+        <span class="hint" id="expinfo">Отметьте диалоги галочками. В архиве — переписка каждого диалога в TXT (с переходами этапов и действиями) и все сообщения таблицей messages.csv.</span>
+      </div>
+      <script>
+      function expCount() {
+        const all = document.querySelectorAll('input.dchk'), n = [...all].filter(c => c.checked).length;
+        document.getElementById('expbtn').disabled = !n;
+        document.getElementById('expbtn').textContent = n ? 'Скачать выделенные: ' + n + ' (.zip)' : 'Скачать выделенные (.zip)';
+        const a = document.getElementById('chkall'); a.checked = n && n === all.length; a.indeterminate = n > 0 && n < all.length;
+      }
+      </script>
+      <?php endif; ?>
     </div>
     <?php
 }
@@ -75,7 +90,8 @@ function view_dialog_card(int $id, bool $sandbox): void
     <?php endif; ?>
     <div class="two">
       <div class="card">
-        <h2><?= $sandbox ? 'Песочница' : h(client_display_name($c)) ?> <small class="muted">· диалог #<?= $id ?> · <?= h(CHANNEL_NAMES[$d['channel']] ?? $d['channel']) ?></small></h2>
+        <h2><?= $sandbox ? 'Песочница' : h(client_display_name($c)) ?> <small class="muted">· диалог #<?= $id ?> · <?= h(CHANNEL_NAMES[$d['channel']] ?? $d['channel']) ?></small>
+          <a class="dl" href="?tab=dialogs&export_txt=<?= $id ?>" title="Переписка с переходами этапов, действиями и собранными данными">⬇ Скачать .txt</a></h2>
         <?php if ($sandbox): ?>
           <p class="hint">Пишите как клиент. Ответ идёт по активному сценарию; в Битрикс24 <?= setting('b24_sandbox_live') === '1' && b24_live('sandbox') ? '<b class="bad">пишется по-настоящему</b>' : 'ничего не уходит — в журнале видно, что ушло бы' ?>.</p>
         <?php else: ?>

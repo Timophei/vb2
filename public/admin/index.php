@@ -89,6 +89,13 @@ $tab = (string)($_GET['tab'] ?? 'dialogs');
 $flash = $_SESSION['flash'] ?? ''; unset($_SESSION['flash']);
 $view = []; // данные для отображения после POST без редиректа (проверка сценария)
 
+if (isset($_GET['export_txt'])) {
+    $eid = (int)$_GET['export_txt'];
+    $tmp = tempnam(sys_get_temp_dir(), 'dlg');
+    file_put_contents($tmp, dialog_export_txt($eid));
+    send_download($tmp, 'dialog_' . $eid . '_' . date('Ymd_Hi') . '.txt', 'text/plain; charset=utf-8');
+}
+
 if ($tab === 'catalog' && isset($_GET['export'])) {
     $sec = (string)$_GET['export'];
     $tmp = tempnam(sys_get_temp_dir(), 'cat');
@@ -177,6 +184,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             case 'dlg_unpause':
                 $d = dialog_load($dlgId); $d['paused_until'] = null; dialog_save($d);
                 go($back, 'Пауза снята.');
+            case 'dlg_export':
+                $ids = (array)($_POST['ids'] ?? []);
+                if (!$ids) go('tab=dialogs', 'Отметьте галочками диалоги для выгрузки.');
+                send_download(dialogs_export_zip($ids), 'dialogs_' . date('Ymd_Hi') . '_' . count($ids) . '.zip', 'application/zip');
             case 'dlg_delete':
                 $d = dialog_load($dlgId);
                 db()->prepare('DELETE FROM dialogs WHERE id = ?')->execute([$dlgId]);

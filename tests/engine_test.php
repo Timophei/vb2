@@ -461,6 +461,18 @@ save_note($nid, 'M Bank — частые вопросы', 'cards/mbank', "# По
 $hits = retrieve('зачисление лимит', ['cards/mbank']);
 check($hits && str_contains($hits[0]['text'], 'одного рабочего дня') && !retrieve('Т-Банк реквизиты комиссии', ['cards/mbank']), 'правка заметки заменяет старый текст');
 
+echo "\n7. Выгрузка диалогов\n";
+$txt = dialog_export_txt($dlg);
+check(str_contains($txt, 'Диалог #' . $dlg) && str_contains($txt, 'Клиент:') && str_contains($txt, 'хочу зарубежную карту') && str_contains($txt, '⇒'), 'TXT: шапка, реплики, переходы этапов');
+check(str_contains($txt, 'Собранные данные:'), 'TXT: собранные данные в конце');
+$zp = dialogs_export_zip([$dlg, $dlg, 999999]);
+$z = new ZipArchive(); $z->open($zp);
+$names = []; for ($i = 0; $i < $z->numFiles; $i++) $names[] = $z->getNameIndex($i);
+$csv = (string)$z->getFromName('messages.csv');
+check(count($names) === 2 && in_array('messages.csv', $names, true), 'ZIP: один TXT на диалог (дубли и несуществующие пропущены) + messages.csv');
+check(str_starts_with($csv, "\xEF\xBB\xBF") && substr_count($csv, "\r\n") === 1 + count(dialog_messages($dlg, 1000)), 'CSV: BOM, заголовок и по строке на сообщение');
+$z->close(); @unlink($zp);
+
 echo "\n5. Песочница не пишет в Битрикс\n";
 $GLOBALS['CLS'] = ['я на вакансию водителя, Сидоров Пётр, 89140000000, резюме нет' => ['jobs', ['jobs.position' => 'водитель', 'jobs.full_name' => 'Сидоров / Пётр / ', 'contact' => '89140000000', 'jobs.no_resume' => 'true']]];
 $GLOBALS['B24'] = [];

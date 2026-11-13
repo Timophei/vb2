@@ -15,6 +15,7 @@ require_once __DIR__ . '/kb.php';
 require_once __DIR__ . '/clients.php';
 require_once __DIR__ . '/catalog.php';
 require_once __DIR__ . '/catalog_io.php';
+require_once __DIR__ . '/export.php';
 require_once __DIR__ . '/telegram.php';
 require_once __DIR__ . '/bitrix.php';
 require_once __DIR__ . '/b24map.php';
