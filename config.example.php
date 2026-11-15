@@ -11,6 +11,8 @@ return [
     'openai_api_key'   => 'sk-...',
     'openai_base_url'  => 'https://api.openai.com/v1', // если OpenAI блокирует сервер — адрес прокси/шлюза
     'chat_model'       => 'gpt-5-mini',
+    'judge_model'           => 'gpt-5',     // модель-оценщик качества диалогов (bin/judge.php, bin/simulate.php); лучше сильнее, чем у бота
+    'judge_reasoning_effort'=> 'medium',
     'reasoning_effort' => 'minimal',  // gpt-5*: minimal | low | medium; null — не передавать
     'embedding_model'  => 'text-embedding-3-small',
     'use_embeddings'   => true,       // false — только полнотекстовый поиск по материалам

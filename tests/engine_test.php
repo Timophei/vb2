@@ -27,6 +27,12 @@ function openai_mock(string $path, array $p): array
     $msgs = $p['messages'];
     $lastUser = '';
     foreach (array_reverse($msgs) as $m) if ($m['role'] === 'user') { $lastUser = preg_replace('/\n\[клиент приложил.*$/su', '', $m['content']); break; }
+    if (($p['response_format']['json_schema']['name'] ?? '') === 'dialog_quality') {
+        $GLOBALS['JUDGE_PROMPT'] = $p['messages'][0]['content'] . "\n" . $p['messages'][1]['content'];
+        $sc = [];
+        foreach ($p['response_format']['json_schema']['schema']['properties']['scores']['items']['properties']['code']['enum'] as $c) $sc[] = ['code' => $c, 'score' => $c === 'recommendation' ? 0 : 4, 'comment' => 'ок'];
+        return ['choices' => [['message' => ['content' => json_encode(['scores' => $sc, 'overall' => 4, 'summary' => 'неплохо', 'worst' => '', 'fixes' => ['совет']], JSON_UNESCAPED_UNICODE)]]], 'usage' => ['total_tokens' => 50]];
+    }
     if (isset($p['response_format'])) {
         [$intent, $slots, $profile] = ($GLOBALS['CLS'][$lastUser] ?? ['none', []]) + [2 => null];
         $arr = [];
@@ -563,6 +569,15 @@ say($dlg3, 'нужна карта');
 say($dlg3, 'давай быстрее, некогда');
 check(!str_contains($GLOBALS['LAST_PROMPT'], 'не раньше чем'), 'торопливому клиенту нижний порог не держим');
 $GLOBALS['REPLY'] = []; $GLOBALS['SHORT'] = null;
+
+echo "\n9. Оценка качества диалога моделью-судьёй\n";
+$j = judge_dialog($dlg);
+check($j['overall'] == 4 && ($j['scores']['recommendation']['score'] ?? -1) === 0 && judge_avg($j) == 4.0, 'баллы разобраны, неприменимый критерий не тянет среднее');
+check(str_contains($GLOBALS['JUDGE_PROMPT'], 'Квалификация') && str_contains($GLOBALS['JUDGE_PROMPT'], 'нужна карта, часто езжу'), 'судья получает критерии и стенограмму');
+check(str_contains($GLOBALS['JUDGE_PROMPT'], '## Каталог'), 'судья получает каталог для проверки точности');
+check((bool)db()->query("SELECT COUNT(*) FROM actions_log WHERE dialog_id = {$dlg} AND action = 'judge'")->fetchColumn(), 'оценка записана в журнал диалога');
+$sc2 = $sc; $sc2['settings']['quality_rubric'] = [['code' => 'x', 'title' => 'Своё', 'check' => 'проверка']];
+check(array_column(judge_rubric($sc2), 'code') === ['x'], 'критерии можно задать в сценарии (settings.quality_rubric)');
 
 echo "\n" . ($fails ? "ПРОВАЛЕНО: $fails" : 'Все проверки пройдены') . "\n";
 exec('rm -rf ' . escapeshellarg($tmp));

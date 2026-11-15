@@ -17,6 +17,12 @@ function openai_mock(string $path, array $p): array
 {
     $last = '';
     foreach (array_reverse($p['messages']) as $m) if ($m['role'] === 'user') { $last = mb_strtolower((string)$m['content']); break; }
+    if (($p['response_format']['json_schema']['name'] ?? '') === 'dialog_quality') {
+        $GLOBALS['JUDGE_PROMPT'] = $p['messages'][0]['content'] . "\n" . $p['messages'][1]['content'];
+        $sc = [];
+        foreach ($p['response_format']['json_schema']['schema']['properties']['scores']['items']['properties']['code']['enum'] as $c) $sc[] = ['code' => $c, 'score' => $c === 'recommendation' ? 0 : 4, 'comment' => 'ок'];
+        return ['choices' => [['message' => ['content' => json_encode(['scores' => $sc, 'overall' => 4, 'summary' => 'неплохо', 'worst' => '', 'fixes' => ['совет']], JSON_UNESCAPED_UNICODE)]]], 'usage' => ['total_tokens' => 50]];
+    }
     if (isset($p['response_format'])) {
         $intent = 'none'; $slots = [];
         $rules = ['грин' => 'green_card', 'green' => 'green_card', 'ваканс' => 'jobs', 'работ' => 'jobs', 'виз' => 'visa', 'карт' => 'cards', 'человек' => 'ask_human', 'менеджер' => 'ask_human', 'подумаю' => 'postpone'];

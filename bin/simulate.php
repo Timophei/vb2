@@ -9,6 +9,8 @@ declare(strict_types=1);
  *   sudo -u www-data php bin/simulate.php --runs=3            каждого по 3 раза (ответы модели разные)
  *   sudo -u www-data php bin/simulate.php --scenario=12       версия сценария по id (не обязательно активная)
  *   sudo -u www-data php bin/simulate.php --max-turns=12 --client-model=gpt-5-mini
+ *   sudo -u www-data php bin/simulate.php --no-judge          без оценки качества (дешевле)
+ *   sudo -u www-data php bin/simulate.php --judge-model=gpt-5 модель-оценщик (по умолчанию judge_model из config.php)
  *
  * Итог: стенограммы и сводка в data/sim/<дата>/ (report.txt + по файлу на диалог) и в консоли.
  * Метрики: реплик бота до рекомендации и до счёта, вопросов до рекомендации, средняя/максимальная длина ответа,
@@ -62,7 +64,9 @@ const SIM_PERSONAS = [
     ],
 ];
 
-$args = getopt('', ['persona:', 'runs:', 'scenario:', 'max-turns:', 'client-model:', 'list']);
+$args = getopt('', ['persona:', 'runs:', 'scenario:', 'max-turns:', 'client-model:', 'list', 'no-judge', 'judge-model:']);
+$judge = !isset($args['no-judge']);
+$judgeModel = isset($args['judge-model']) ? (string)$args['judge-model'] : null;
 if (isset($args['list'])) { foreach (SIM_PERSONAS as $k => $p) echo str_pad($k, 12) . $p['title'] . "\n"; exit(0); }
 $codes = isset($args['persona']) ? array_map('trim', explode(',', (string)$args['persona'])) : array_keys(SIM_PERSONAS);
 foreach ($codes as $c) if (!isset(SIM_PERSONAS[$c])) { fwrite(STDERR, "Нет персонажа «{$c}». Список: --list\n"); exit(1); }
@@ -152,31 +156,51 @@ foreach ($codes as $code) {
             'asked' => $asked, 'offer_at' => $offerAt, 'invoice_at' => $invoiceAt, 'shortened' => $shortened,
             'profile' => $prof ? value_text($d['slots'][$prof] ?? null) : '', 'error' => $err,
         ];
+        $row['judge'] = null;
+        if ($judge && $err === '') {
+            try { $row['judge'] = judge_dialog($dlg, $judgeModel); echo '  оценка: ' . $row['judge']['overall'] . '/5 — ' . $row['judge']['summary'] . "\n"; }
+            catch (Throwable $e) { $row['error'] = 'оценка: ' . $e->getMessage(); }
+        }
         $rows[] = $row;
-        file_put_contents(sprintf('%s/%02d_%s.txt', $outDir, $n, $code), dialog_export_txt($dlg));
+        $txt = dialog_export_txt($dlg);
+        if ($row['judge']) $txt .= "\n" . str_repeat('=', 60) . "\n" . judge_text($row['judge'], judge_rubric(scenario_for($d))) . "\n";
+        file_put_contents(sprintf('%s/%02d_%s.txt', $outDir, $n, $code), $txt);
     }
 }
 
 /* ---------- сводка ---------- */
-$W = [11, 7, 18, 5, 6, 5, 6, 7, 8, 7, 5];
+$W = [11, 7, 18, 5, 6, 5, 6, 7, 8, 7, 5, 7];
 $line = function (array $cells) use ($W): string {
     $out = '';
     foreach ($cells as $i => $c) $out .= $i === 0 || $i === 2 ? mb_str_pad((string)$c, $W[$i]) : mb_str_pad((string)$c, $W[$i], ' ', STR_PAD_LEFT);
     return rtrim($out);
 };
-$report[] = $line(['персонаж', 'диалог', ' итог', 'отв.', 'сред.', 'макс', '>лим.', '2+вопр', 'вопр.до', 'рек.на', 'счёт']);
+$report[] = $line(['персонаж', 'диалог', ' итог', 'отв.', 'сред.', 'макс', '>лим.', '2+вопр', 'вопр.до', 'рек.на', 'счёт', 'оценка']);
 foreach ($rows as $r) {
     $report[] = $line([$r['code'], '#' . $r['dialog'], ' ' . mb_strimwidth(sc_state_title(scenario_for(dialog_load($r['dialog'])), $r['state']), 0, 16, '…'),
-        $r['bot_msgs'], $r['avg'], $r['max'], $r['over'], $r['multi_q'], $r['asked'], $r['offer_at'] ?? '—', $r['invoice_at'] ?? '—']);
+        $r['bot_msgs'], $r['avg'], $r['max'], $r['over'], $r['multi_q'], $r['asked'], $r['offer_at'] ?? '—', $r['invoice_at'] ?? '—',
+        $r['judge'] ? (int)$r['judge']['overall'] . '/5' : '—']);
 }
 $report[] = '';
 $report[] = "Колонки: отв. — ответов бота; сред./макс — длина ответа в символах; >лим. — ответов длиннее {$rs['max_chars']}; 2+вопр — ответов с двумя и более вопросами;";
-$report[] = 'вопр.до — уточняющих вопросов до рекомендации; рек.на / счёт — на каком ответе бота названа карта / выставлен счёт.';
+$report[] = 'вопр.до — уточняющих вопросов до рекомендации; рек.на / счёт — на каком ответе бота названа карта / выставлен счёт; оценка — общий балл модели-оценщика.';
+// средние баллы по критериям по всем диалогам — где бот слабее всего
+$judged = array_values(array_filter(array_column($rows, 'judge')));
+if ($judged) {
+    $report[] = '';
+    $report[] = 'Средние баллы по критериям (' . count($judged) . ' диалогов, неприменимые не считаются):';
+    foreach (judge_rubric($sc0) as $c) {
+        $v = array_filter(array_map(fn($j) => $j['scores'][$c['code']]['score'] ?? 0, $judged));
+        $report[] = '  ' . mb_str_pad($c['title'], 16) . ($v ? sprintf('%.1f', array_sum($v) / count($v)) : '—');
+    }
+    $report[] = sprintf('  %s%.1f', mb_str_pad('Общая', 16), array_sum(array_column($judged, 'overall')) / count($judged));
+}
 $report[] = '';
 foreach ($rows as $r) {
     $extra = array_filter([
         $r['shortened'] ? "сокращений: {$r['shortened']}" : '',
         $r['profile'] !== '' ? "профиль: {$r['profile']}" : '',
+        $r['judge'] ? 'оценщик: ' . $r['judge']['summary'] . ($r['judge']['fixes'] ? ' Совет: ' . $r['judge']['fixes'][0] : '') : '',
         $r['error'] !== '' ? "ОШИБКА: {$r['error']}" : '',
     ]);
     if ($extra) $report[] = "#{$r['dialog']} {$r['code']}: " . implode(' · ', $extra);
