@@ -217,7 +217,7 @@ function act_notify_manager(array &$T, array $a): void
     $lines = [];
     foreach ($T['d']['slots'] as $name => $v) {
         $txt = value_text($v);
-        if ($txt !== '' && !preg_match('/^(handoff_|crosssell|followup\.return)/', $name)) $lines[] = '• ' . htmlspecialchars($name) . ': ' . htmlspecialchars(mb_strimwidth($txt, 0, 200, '…'));
+        if ($txt !== '' && !preg_match('/^(handoff_|crosssell|followup\.return)/', $name) && !slot_is_hidden($T['sc'], $name)) $lines[] = '• ' . htmlspecialchars($name) . ': ' . htmlspecialchars(mb_strimwidth($txt, 0, 200, '…'));
     }
     $html = ($prio === 'urgent' ? '🔴 <b>СРОЧНО</b> · ' : '🔔 ') . '<b>' . htmlspecialchars($text) . '</b>'
         . "\nКлиент: " . htmlspecialchars(client_display_name($c)) . ($c['phone'] ? ' · ' . htmlspecialchars($c['phone']) : '')

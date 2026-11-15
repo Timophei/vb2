@@ -17,7 +17,7 @@ const BUILTIN_SLOTS = [
 const KNOWN_ACTIONS = ['say', 'b24_update_lead', 'b24_attach_resume', 'b24_create_smart_item', 'openline_finish', 'notify_manager', 'pause_bot'];
 const KNOWN_TOOLS = ['kb_search', 'biometry_check', 'send_form_link', 'create_payment_link'];
 const STATE_TYPES = ['conversation', 'transit', 'waiting', 'terminal'];
-const SLOT_TYPES = ['string', 'phone', 'contact', 'enum', 'int', 'bool', 'fio', 'file_or_link', 'list', 'counter', 'catalog_ref', 'money', 'datetime', 'state_ref'];
+const SLOT_TYPES = ['string', 'phone', 'contact', 'enum', 'int', 'bool', 'fio', 'file_or_link', 'list', 'counter', 'catalog_ref', 'money', 'datetime', 'state_ref', 'object'];
 /** События, которые генерирует сам движок или админка. */
 const SYSTEM_EVENTS = ['client_message', 'operator_message', 'turn_limit_exceeded', 'invoice_sent', 'payment.paid', 'payment.failed', 'payment_timeout', 'manager_took_over', 'followup_due', 'bot_answered_question'];
 
@@ -160,6 +160,10 @@ function scenario_validate(array $sc): array
         $t = $def['type'] ?? 'string';
         if (!in_array($t, SLOT_TYPES, true)) $E[] = "слот {$name}: неизвестный тип «{$t}» (можно: " . implode(', ', SLOT_TYPES) . ')';
         if ($t === 'enum' && empty($def['values'])) $E[] = "слот {$name}: enum без values";
+        if ($t === 'object') {
+            if (empty($def['fields']) || !is_array($def['fields'])) $E[] = "слот {$name}: object без fields";
+            else foreach ($def['fields'] as $fn => $fd) if (empty($fd['values']) || !is_array($fd['values'])) $E[] = "слот {$name}.{$fn}: нужен список values";
+        }
         if (isset($def['b24_field']) && is_todo($def['b24_field'])) $W[] = "слот {$name}: поле Б24 не задано (TODO) — значение пойдёт в комментарий лида";
     }
 
@@ -272,4 +276,40 @@ function scenario_add_section_questions(array &$sc): void
             $sc['states'][$k]['section_questions'][$sec['code']] = $sec['questions'];
         }
     }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Скрытые слоты и профиль клиента                                    */
+/* ------------------------------------------------------------------ */
+
+/** Скрытый слот: не уходит в Битрикс, уведомления и список «что известно»; клиенту не показывается. */
+function slot_is_hidden(array $sc, string $name): bool
+{
+    $def = $sc['slots'][$name] ?? [];
+    return !empty($def['hidden']) || ($def['type'] ?? '') === 'object';
+}
+
+/** Имя слота-профиля (type object с fields), если он есть в сценарии. */
+function profile_slot(array $sc): ?string
+{
+    foreach ((array)($sc['slots'] ?? []) as $name => $def) {
+        if (($def['type'] ?? '') === 'object' && !empty($def['fields']) && is_array($def['fields'])) return (string)$name;
+    }
+    return null;
+}
+
+/** Настройки стиля ответа (settings.reply_style) со значениями по умолчанию. null — в сценарии не задано. */
+function reply_style(array $sc): ?array
+{
+    $rs = $sc['settings']['reply_style'] ?? null;
+    if (!is_array($rs)) return null;
+    return [
+        'max_sentences' => max(1, (int)($rs['max_sentences'] ?? 3)),
+        'max_chars' => max(80, (int)($rs['max_chars'] ?? 300)),
+        'max_questions' => max(1, (int)($rs['max_questions'] ?? 1)),
+        'max_questions_before_offer' => max(0, (int)($rs['max_questions_before_offer'] ?? 2)),
+        'overflow' => array_values(array_filter((array)($rs['overflow_allowed_for'] ?? []), 'is_string')),
+        'shorten_factor' => max(1.0, (float)($rs['shorten_factor'] ?? 1.5)),
+        'shorten_factor_terms' => max(1.0, (float)($rs['shorten_factor_terms'] ?? 3.0)),
+    ];
 }

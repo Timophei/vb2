@@ -62,6 +62,7 @@ function value_text($v): string
         if (isset($v['last']) || isset($v['first'])) return trim(implode(' ', array_filter([$v['last'] ?? '', $v['first'] ?? '', $v['middle'] ?? ''])));
         if (isset($v['value'])) return (string)$v['value'];
         if (isset($v['name'], $v['file'])) return 'файл ' . $v['name'];
+        if (is_profile_value($v)) return profile_text($v);
         if (array_is_list($v)) return implode(', ', array_map('value_text', $v));
         return jenc($v);
     }
@@ -161,7 +162,7 @@ function slot_coerce(array $sc, string $name, $raw, $current)
         case 'file_or_link':
             if (preg_match('#https?://\S+#u', $s, $m)) return ['link' => rtrim($m[0], '.,;)')];
             return null;
-        case 'counter': case 'money': case 'state_ref':
+        case 'counter': case 'money': case 'state_ref': case 'object':
             return null; // заполняет только движок
         default:
             return mb_substr($s, 0, 600);
@@ -174,7 +175,7 @@ function classifiable_slots(array $sc): array
     $out = [];
     foreach ((array)($sc['slots'] ?? []) as $name => $def) {
         $t = $def['type'] ?? 'string';
-        if (in_array($t, ['counter', 'money', 'state_ref'], true)) continue;
+        if (in_array($t, ['counter', 'money', 'state_ref', 'object'], true)) continue; // object (профиль) — отдельным блоком классификатора
         if (preg_match('/^(payment|handoff_|followup\.return|crosssell)/', $name)) continue;
         if (str_ends_with($name, '_id') && $t === 'int') continue;
         if (str_ends_with($name, '_asked')) continue;
@@ -448,6 +449,7 @@ function engine_message(int $dialogId, string $text, ?array $attachment = null):
             $v = slot_coerce($T['sc'], $name, $raw, $T['d']['slots'][$name] ?? null);
             if ($v !== null) slot_set($T, $name, $v);
         }
+        if (!empty($cls['profile'])) profile_merge($T, $cls['profile']);
         // интент-продукт заполняет слот intent (для выбора ветки в приветствии)
         $intentSlot = $T['sc']['slots']['intent'] ?? null;
         if ($intent && $intentSlot && in_array($intent, (array)($intentSlot['values'] ?? []), true) && empty($T['d']['slots']['intent'])) {
@@ -501,6 +503,7 @@ function engine_finish(array &$T, bool $needReply, string $userText, string $eve
         try {
             $reply = respond($T, $userText, $eventNote);
             if ($reply !== '') array_unshift($out, $reply);
+            if ($userText !== '') count_offer_questions($T, $reply);
             // объявление о паузе — первым, слово в слово
             foreach (array_reverse($T['notice'] ?? []) as $n) array_unshift($out, $n);
             $T['notice'] = [];
@@ -549,4 +552,103 @@ function engine_operator_message(int $dialogId, string $text, string $who = ''):
     $T['d']['counters']['event:operator_message'] = (int)($T['d']['counters']['event:operator_message'] ?? 0) + 1;
     eval_transitions($T, ['event' => 'operator_message']);
     dialog_save($T['d']);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Профиль клиента (скрытый слот type object)                         */
+/* ------------------------------------------------------------------ */
+
+const PROFILE_CONFIDENCE = ['low' => 1, 'medium' => 2, 'high' => 3];
+
+/** Значение профиля: поля вида {value, confidence, evidence}. */
+function is_profile_value($v): bool
+{
+    if (!is_array($v) || !$v || array_is_list($v)) return false;
+    foreach ($v as $f) if (!is_array($f) || !array_key_exists('value', $f) || !array_key_exists('confidence', $f)) return false;
+    return true;
+}
+
+function profile_text(array $v): string
+{
+    $p = [];
+    foreach ($v as $k => $f) {
+        if (($f['value'] ?? 'unknown') === 'unknown') continue;
+        $p[] = "{$k}: {$f['value']} ({$f['confidence']})" . (($f['evidence'] ?? '') !== '' ? ' — ' . $f['evidence'] : '');
+    }
+    return implode('; ', $p);
+}
+
+/**
+ * Обновление профиля по ответу классификатора: «unknown» ничего не меняет,
+ * новое значение заменяет старое (предположение пересматривается при новом сигнале),
+ * то же значение — уверенность не понижается, пример обновляется.
+ */
+function profile_merge(array &$T, array $parsed): void
+{
+    $name = profile_slot($T['sc']);
+    if ($name === null) return;
+    $fields = (array)($T['sc']['slots'][$name]['fields'] ?? []);
+    $cur = is_array($T['d']['slots'][$name] ?? null) ? $T['d']['slots'][$name] : [];
+    $new = $cur;
+    foreach ($fields as $fn => $fd) {
+        $p = $parsed[$fn] ?? null;
+        if (!is_array($p)) continue;
+        $val = (string)($p['value'] ?? 'unknown');
+        if ($val === 'unknown' || !in_array($val, (array)$fd['values'], true)) continue;
+        $conf = isset(PROFILE_CONFIDENCE[$p['confidence'] ?? '']) ? (string)$p['confidence'] : 'low';
+        $ev = mb_substr(trim((string)($p['evidence'] ?? '')), 0, 160);
+        $old = $cur[$fn] ?? null;
+        if ($old && ($old['value'] ?? '') === $val && PROFILE_CONFIDENCE[$old['confidence'] ?? 'low'] > PROFILE_CONFIDENCE[$conf]) $conf = (string)$old['confidence'];
+        $new[$fn] = ['value' => $val, 'confidence' => $conf, 'evidence' => $ev !== '' ? $ev : (string)($old['evidence'] ?? '')];
+    }
+    if ($new !== $cur) slot_set($T, $name, $new);
+}
+
+/** Рекомендация уже сделана: бот назвал товар раздела или клиент уже выбрал товар (слот catalog_ref этапа). */
+function offer_made(array $T): bool
+{
+    if (!empty($T['d']['counters']['offered.' . $T['d']['state']])) return true;
+    $st = sc_state($T['sc'], $T['d']['state']);
+    foreach (array_merge((array)($st['slots_required'] ?? []), (array)($st['slots_optional'] ?? [])) as $sl) {
+        if ((sc_slot($T['sc'], $sl)['type'] ?? '') === 'catalog_ref' && slot_filled(slot_get($T, $sl), sc_slot($T['sc'], $sl))) return true;
+    }
+    return false;
+}
+
+/** Вопросы в ответе (знак «?» в конце фразы; ссылки вида pay.php?c= не считаются). */
+function count_questions(string $text): int
+{
+    $t = preg_replace('#https?://\S+#u', '', $text);
+    return preg_match_all('/\?+(?=\s|$|[»")\]])/u', (string)$t);
+}
+
+/** Счётчик уточняющих вопросов до рекомендации — только в этапах с подбором из каталога. */
+function count_offer_questions(array &$T, string $reply): void
+{
+    $st = sc_state($T['sc'], $T['d']['state']);
+    if (empty($st['section_questions']) || offer_made($T)) return;
+    if (reply_names_product($reply, array_keys((array)$st['section_questions']))) {
+        $T['d']['counters']['offered.' . $T['d']['state']] = 1;
+        return;
+    }
+    if (count_questions($reply) > 0) {
+        $k = 'asked_before_offer.' . $T['d']['state'];
+        $T['d']['counters'][$k] = (int)($T['d']['counters'][$k] ?? 0) + 1;
+    }
+}
+
+/** В ответе назван товар или тариф из разделов (по названию до « — » / «(» или названию тарифа, от 3 букв). */
+function reply_names_product(string $reply, array $sections): bool
+{
+    $low = mb_strtolower($reply);
+    foreach (catalog_all(true) as $p) {
+        if (!in_array($p['section'], array_map('normalize_section', $sections), true)) continue;
+        $names = [preg_split('/\s+[—–-]\s+|\s*\(/u', (string)($p['name'] ?? ''))[0] ?? ''];
+        foreach ($p['variants'] ?? [] as $v) if (!str_starts_with((string)$v['id'], 'TODO')) $names[] = (string)($v['name'] ?? '');
+        foreach ($names as $n) {
+            $n = mb_strtolower(trim($n));
+            if (mb_strlen($n) >= 3 && !str_starts_with($n, 'todo') && str_contains($low, $n)) return true;
+        }
+    }
+    return false;
 }

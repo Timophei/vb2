@@ -470,15 +470,16 @@ function view_catalog(): void
       <?= csrf_field('section_save', ['code' => $secSel]) ?>
       <h2>Раздел <code><?= h($secSel) ?></code></h2>
       <p class="hint">Используют состояния: <?= $users ? h(implode(', ', $users)) : '<span class="bad">ни одно (в сценарии нет knowledge «catalog:' . h($secSel) . '»)</span>' ?>.
-        Вопросы — что бот выясняет у клиента, чтобы подобрать товар: задаёт по одному-два, только недостающие; ответы запоминает. Код — латиница (станет полем <code>q.<?= h($secSel) ?>.код</code>).</p>
+        Вопросы — подсказки боту, что влияет на подбор (не анкета): он выводит ответы из разговора, а спрашивает только самое важное — «Важный: да» (без ответа рекомендация может оказаться неверной), не больше лимита сценария до рекомендации. Код — латиница (станет полем <code>q.<?= h($secSel) ?>.код</code>).</p>
       <label>Название раздела<input name="name" value="<?= h($s['name']) ?>" placeholder="Зарубежные карты"></label>
       <table class="vtab" id="qt">
-        <tr><th>Код</th><th>Вопрос клиенту</th><th>Варианты ответа</th><th>На что влияет</th><th></th></tr>
+        <tr><th>Код</th><th>Вопрос клиенту</th><th>Варианты ответа</th><th>На что влияет</th><th>Важный</th><th></th></tr>
         <?php foreach (array_merge($s['questions'], [[]]) as $q): ?>
           <tr><td><input name="q[code][]" value="<?= h($q['code'] ?? '') ?>" style="width:110px"></td>
             <td><textarea name="q[question][]" rows="2"><?= h($q['question'] ?? '') ?></textarea></td>
             <td><textarea name="q[options][]" rows="2"><?= h($q['options'] ?? '') ?></textarea></td>
             <td><textarea name="q[affects][]" rows="2"><?= h($q['affects'] ?? '') ?></textarea></td>
+            <td><select name="q[critical][]"><option value="">нет</option><option value="1"<?= !empty($q['critical']) ? ' selected' : '' ?>>да</option></select></td>
             <td><button type="button" class="sec" onclick="this.closest('tr').remove()">✕</button></td></tr>
         <?php endforeach; ?>
       </table>
@@ -558,7 +559,7 @@ function catalog_rows_script(): void
     ?><script>
     function addRow(id) {
       const t = document.getElementById(id), last = t.rows[t.rows.length - 1], r = last.cloneNode(true);
-      r.querySelectorAll('input,textarea').forEach(i => i.value = ''); t.tBodies[0].appendChild(r);
+      r.querySelectorAll('input,textarea').forEach(i => i.value = ''); r.querySelectorAll('select').forEach(s => s.selectedIndex = 0); t.tBodies[0].appendChild(r);
     }
     </script><?php
 }
@@ -766,7 +767,7 @@ function view_bitrix(array $view): void
     $map = b24_map($ent);
     $botFields = bot_fields_for($ent);
     if ($ent !== 'contact') foreach ((array)($sc['slots'] ?? []) as $n => $def) {
-        if (!isset($botFields[$n]) && !isset(BOT_FIELDS[$n]) && !preg_match(BOT_INTERNAL_SLOTS, $n) && !in_array($def['type'] ?? '', ['counter', 'state_ref'], true)) $botFields[$n] = [$def['label'] ?? $n, 'Другое'];
+        if (!isset($botFields[$n]) && !isset(BOT_FIELDS[$n]) && !preg_match(BOT_INTERNAL_SLOTS, $n) && !slot_is_hidden($sc, $n) && !in_array($def['type'] ?? '', ['counter', 'state_ref'], true)) $botFields[$n] = [$def['label'] ?? $n, 'Другое'];
     }
     $groups = [];
     foreach ($botFields as $n => [$label, $g]) $groups[$g][$n] = $label;

@@ -28,10 +28,20 @@ function openai_mock(string $path, array $p): array
     $lastUser = '';
     foreach (array_reverse($msgs) as $m) if ($m['role'] === 'user') { $lastUser = preg_replace('/\n\[клиент приложил.*$/su', '', $m['content']); break; }
     if (isset($p['response_format'])) {
-        [$intent, $slots] = $GLOBALS['CLS'][$lastUser] ?? ['none', []];
+        [$intent, $slots, $profile] = ($GLOBALS['CLS'][$lastUser] ?? ['none', []]) + [2 => null];
         $arr = [];
         foreach ($slots as $k => $v) $arr[] = ['name' => $k, 'value' => (string)$v];
-        return ['choices' => [['message' => ['content' => json_encode(['intent' => $intent, 'slots' => $arr], JSON_UNESCAPED_UNICODE)]]], 'usage' => ['total_tokens' => 10]];
+        $GLOBALS['LAST_CLS_PROMPT'] = $msgs[0]['content'];
+        $GLOBALS['LAST_CLS_SCHEMA'] = $p['response_format']['json_schema']['schema'];
+        $res = ['intent' => $intent, 'slots' => $arr];
+        if ($profile !== null) $res['profile'] = $profile;
+        return ['choices' => [['message' => ['content' => json_encode($res, JSON_UNESCAPED_UNICODE)]]], 'usage' => ['total_tokens' => 10]];
+    }
+    // просьба сократить черновик (пост-проверка стиля)
+    $lastMsg = end($msgs);
+    if ($lastMsg['role'] === 'system' && str_starts_with((string)$lastMsg['content'], 'Черновик выше')) {
+        $GLOBALS['SHORTEN_CALLS'] = ($GLOBALS['SHORTEN_CALLS'] ?? 0) + 1;
+        return ['choices' => [['message' => ['content' => $GLOBALS['SHORT'] ?? 'Коротко.']]], 'usage' => ['total_tokens' => 10]];
     }
     $GLOBALS['LAST_PROMPT'] = $msgs[0]['content'];
     preg_match('/## Текущий этап: (.+)/u', $msgs[0]['content'], $m);
@@ -42,6 +52,7 @@ function openai_mock(string $path, array $p): array
         foreach ($GLOBALS['TOOLS'][$lastUser] as $i => [$name, $args]) $calls[] = ['id' => "c$i", 'type' => 'function', 'function' => ['name' => $name, 'arguments' => json_encode($args, JSON_UNESCAPED_UNICODE)]];
         return ['choices' => [['message' => ['content' => null, 'tool_calls' => $calls]]], 'usage' => ['total_tokens' => 10]];
     }
+    if (isset($GLOBALS['REPLY'][$lastUser]) && !$hadTool) return ['choices' => [['message' => ['content' => $GLOBALS['REPLY'][$lastUser]]]], 'usage' => ['total_tokens' => 20]];
     $toolRes = '';
     foreach ($msgs as $x) if ($x['role'] === 'tool') $toolRes .= ' tool=' . $x['content'];
     return ['choices' => [['message' => ['content' => "[ответ: $stage]$toolRes"]]], 'usage' => ['total_tokens' => 20]];
@@ -445,7 +456,7 @@ $GLOBALS['TOOLS'] = [];
 $dlg = new_dialog('web:cards1');
 $out = say($dlg, 'хочу зарубежную карту');
 check(state($dlg) === 'cards', 'часть карт на паузе — этап «Карты» работает');
-check(str_contains($GLOBALS['LAST_PROMPT'], '## Подбор: вопросы клиенту') && str_contains($GLOBALS['LAST_PROMPT'], 'С какого банка вам удобно пополнять'), 'в промпте вопросы для подбора');
+check(str_contains($GLOBALS['LAST_PROMPT'], '## Подбор: что влияет на выбор') && str_contains($GLOBALS['LAST_PROMPT'], 'С какого банка вам удобно пополнять'), 'в промпте вопросы для подбора');
 check(str_contains($GLOBALS['LAST_PROMPT'], 'M Bank') && !str_contains($GLOBALS['LAST_PROMPT'], 'VISA Virtual Card'), 'паузный товар модель не видит, остальные видит');
 $sc2 = scenario_active();
 check(isset($sc2['slots']['q.cards.topup']), 'ответы на вопросы — поля q.cards.*');
@@ -482,6 +493,56 @@ check(state($dlg) === 'anything_else', 'песочница: вакансия о�
 check($GLOBALS['B24'] === [], 'в Б24 ничего не ушло');
 $dry = db()->query("SELECT COUNT(*) FROM actions_log WHERE dialog_id = $dlg AND result LIKE 'тестовый режим%'")->fetchColumn();
 check($dry >= 3, 'в журнале видно, что ушло бы в Б24');
+
+echo "\n8. Инициативное консультирование: профиль клиента, вопросы до рекомендации, длина ответа\n";
+check(profile_slot($sc) === 'client.profile' && slot_is_hidden($sc, 'client.profile'), 'профиль — скрытый слот сценария');
+check(count_questions('Вам срочно? Ссылка: https://x.ru/pay.php?c=1. Оформляем?') === 2, 'вопросы считаются, «?» в ссылке — нет');
+$P = fn($pp, $sv, $ds) => ['price_priority' => $pp, 'service_level' => $sv, 'decision_style' => $ds];
+$F = fn($v, $c = 'medium', $e = '') => ['value' => $v, 'confidence' => $c, 'evidence' => $e];
+$long = str_repeat('Это очень подробный ответ про карты и тарифы банков. ', 12) . 'Вам удобнее так или иначе? А что по срокам?';
+$GLOBALS['CLS'] = [
+    'нужна карта, часто езжу и плачу подписки' => ['cards', ['cards.purpose' => 'поездки и подписки'], $P($F('unknown'), $F('unknown'), $F('unknown'))],
+    'можно 7–10 дней' => ['none', [], $P($F('unknown'), $F('unknown'), $F('fast', 'low', 'короткий ответ'))],
+    'давай самый жирный' => ['none', [], $P($F('low', 'high', 'самый жирный'), $F('premium', 'high', 'самый жирный'), $F('fast', 'medium', '«давай»'))],
+    'а подешевле есть?' => ['none', [], $P($F('high', 'medium', 'подешевле'), $F('unknown'), $F('unknown'))],
+];
+$GLOBALS['REPLY'] = [
+    'нужна карта, часто езжу и плачу подписки' => 'Похоже, нужна мультивалютная карта для поездок и подписок. Виртуалка нужна срочно?',
+    'можно 7–10 дней' => $long,
+    'давай самый жирный' => 'Тогда M Bank, тариф Platinum: залы и страховка. Оформляем?',
+];
+$GLOBALS['SHORT'] = 'А в поездках важны бизнес-залы и страховка?';
+$GLOBALS['SHORTEN_CALLS'] = 0;
+$GLOBALS['B24'] = [];
+$dlg = new_dialog('web:init1');
+say($dlg, 'нужна карта, часто езжу и плачу подписки');
+check(isset($GLOBALS['LAST_CLS_SCHEMA']['properties']['profile']) && str_contains($GLOBALS['LAST_CLS_PROMPT'], '## Профиль клиента'), 'классификатор получает блок и схему профиля');
+check(!isset(dialog_load($dlg)['slots']['client.profile']), 'всё unknown — профиль не заводится');
+check(str_contains($GLOBALS['LAST_PROMPT'], 'до 300 символов') && !str_contains($GLOBALS['LAST_PROMPT'], '1–4 абзаца'), 'лимиты reply_style в промпте вместо «1–4 абзаца»');
+check(str_contains($GLOBALS['LAST_PROMPT'], 'задано: 0 из 2'), 'счётчик вопросов до рекомендации: 0 из 2');
+check((int)(dialog_load($dlg)['counters']['asked_before_offer.cards'] ?? 0) === 1, 'бот задал вопрос — счётчик 1');
+$out = say($dlg, 'можно 7–10 дней');
+check($GLOBALS['SHORTEN_CALLS'] === 1 && ($out[0] ?? '') === $GLOBALS['SHORT'], 'длинный ответ с двумя вопросами сокращён одной перегенерацией');
+check((int)(dialog_load($dlg)['counters']['asked_before_offer.cards'] ?? 0) === 2, 'второй вопрос — счётчик 2');
+$pr = dialog_load($dlg)['slots']['client.profile'] ?? [];
+check(($pr['decision_style']['value'] ?? '') === 'fast' && !isset($pr['price_priority']), 'профиль: заведено только то, на что есть сигнал');
+say($dlg, 'давай самый жирный');
+check(str_contains($GLOBALS['LAST_PROMPT'], 'лимит 2') && str_contains($GLOBALS['LAST_PROMPT'], 'рекомендуй товар в этом ответе'), 'лимит исчерпан — промпт велит рекомендовать');
+check(str_contains($GLOBALS['LAST_PROMPT'], '## Профиль клиента') && str_contains($GLOBALS['LAST_PROMPT'], 'price_priority: low (уверенность high)'), 'профиль передан ответчику как предположения');
+$kn = explode('## Подбор', explode('## Что уже известно', $GLOBALS['LAST_PROMPT'])[1] ?? '')[0];
+check(!str_contains($kn, 'price_priority'), 'профиля нет в списке «что известно»');
+$d = dialog_load($dlg);
+check(!empty($d['counters']['offered.cards']), 'бот назвал товар — рекомендация засчитана');
+check(($d['slots']['client.profile']['decision_style']['confidence'] ?? '') === 'medium', 'то же значение — уверенность повышена до medium');
+say($dlg, 'а подешевле есть?');
+check(str_contains($GLOBALS['LAST_PROMPT'], 'Рекомендация уже сделана'), 'после рекомендации — без новых вопросов подбора');
+$pr = dialog_load($dlg)['slots']['client.profile'];
+check($pr['price_priority']['value'] === 'high' && $pr['service_level']['value'] === 'premium', 'новый сигнал пересматривает оценку, остальное сохраняется');
+$T = turn_init(dialog_load($dlg));
+[$fl, $cm] = b24_fields_from_slots($T, 'lead');
+check(!str_contains(jenc($fl) . implode("\n", $cm), 'price_priority'), 'профиль не уходит в поля и комментарий Битрикса');
+check(str_contains(dialog_export_txt($dlg), '(скрыто, предположение бота)'), 'в выгрузке диалога профиль помечен как предположение');
+$GLOBALS['REPLY'] = []; $GLOBALS['SHORT'] = null;
 
 echo "\n" . ($fails ? "ПРОВАЛЕНО: $fails" : 'Все проверки пройдены') . "\n";
 exec('rm -rf ' . escapeshellarg($tmp));

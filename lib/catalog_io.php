@@ -10,7 +10,7 @@ declare(strict_types=1);
  *   Тарифы          — Банк (код товара), Код тарифа, Тариф, Наша цена, Плата банку, + любые колонки → характеристики тарифа
  *   Характеристики  — матрица: первая колонка — характеристика, дальше колонки с кодами товаров
  *   Опции           — Банк, Код опции, Название, Тип (выбор / доплата), Наша надбавка, Плата банку, Значения
- *   Вопросы…        — Код, Вопрос клиенту, Варианты ответа, На что влияет, [Раздел]
+ *   Вопросы…        — Код, Вопрос клиенту, Варианты ответа, На что влияет, [Раздел], [Важный: да — без ответа не рекомендовать]
  * Ячейка, начинающаяся с «?», — пометка для человека, не загружается.
  */
 
@@ -164,7 +164,7 @@ function catalog_import_xlsx(string $path, bool $prune = false): array
         foreach ($tab as $r) {
             $sec = cio_col($r, 'Раздел') ?: (count($secsInFile) === 1 ? $secsInFile[0] : '');
             if ($sec === '') { $rep['warnings'][] = 'Вопросы: не указан раздел (в файле товары из нескольких разделов) — пропущено'; continue; }
-            $bySec[normalize_section($sec)][] = ['code' => cio_col($r, 'Код'), 'question' => cio_col($r, 'Вопрос'), 'options' => cio_col($r, 'Варианты'), 'affects' => cio_col($r, 'На что влияет')];
+            $bySec[normalize_section($sec)][] = ['code' => cio_col($r, 'Код'), 'question' => cio_col($r, 'Вопрос'), 'options' => cio_col($r, 'Варианты'), 'affects' => cio_col($r, 'На что влияет'), 'critical' => cio_col($r, 'Важный')];
         }
         foreach ($bySec as $sec => $qs) {
             $cur = section_get($sec);
@@ -225,10 +225,10 @@ function catalog_export_rows(?string $section = null): array
         foreach ($prods as $p) { $v = ''; foreach (props_norm($p['props'] ?? []) as [$k, $val]) if ($k === $n) $v = $val; $row[] = $v; }
         $C[] = $row;
     }
-    $Q = [['Код', 'Вопрос клиенту', 'Варианты ответа', 'На что влияет', 'Раздел']];
+    $Q = [['Код', 'Вопрос клиенту', 'Варианты ответа', 'На что влияет', 'Раздел', 'Важный']];
     foreach (sections_all() as $sec) {
         if ($section !== null && $sec['code'] !== normalize_section($section)) continue;
-        foreach ($sec['questions'] as $q) $Q[] = [$q['code'], $q['question'], $q['options'], $q['affects'], $sec['code']];
+        foreach ($sec['questions'] as $q) $Q[] = [$q['code'], $q['question'], $q['options'], $q['affects'], $sec['code'], !empty($q['critical']) ? 'да' : ''];
     }
     return ['Продукты' => $P, 'Тарифы' => $T, 'Характеристики' => $C, 'Опции' => $O, 'Вопросы' => $Q];
 }

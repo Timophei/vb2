@@ -119,6 +119,8 @@ function classify(array &$T, string $text, ?array $attachment): array
         . "Верни только то, что клиент сообщил или однозначно подтвердил в ПОСЛЕДНЕЙ реплике. Не угадывай и не повторяй уже известное без изменений.\n"
         . "Данные других людей (родственников) в контакты клиента не записывай. Если клиент исправляет данные — верни исправленное.\n";
     foreach ($order as $name) $sys .= slot_hint_line($sc, $name, $slots[$name], $T['d']['slots'][$name] ?? null) . "\n";
+    $prof = profile_slot($sc);
+    if ($prof !== null) $sys .= "\n" . profile_classifier_block($sc, $prof, $T['d']['slots'][$prof] ?? null);
 
     $messages = [['role' => 'system', 'content' => $sys]];
     foreach (history_for_llm($T, 3, true) as $m) $messages[] = $m;
@@ -134,8 +136,8 @@ function classify(array &$T, string $text, ?array $attachment): array
             'schema' => [
                 'type' => 'object',
                 'additionalProperties' => false,
-                'required' => ['intent', 'slots'],
-                'properties' => [
+                'required' => $prof !== null ? ['intent', 'slots', 'profile'] : ['intent', 'slots'],
+                'properties' => ($prof !== null ? ['profile' => profile_schema($sc, $prof)] : []) + [
                     'intent' => ['type' => 'string', 'enum' => array_merge($intents, ['none'])],
                     'slots' => [
                         'type' => 'array',
@@ -170,7 +172,41 @@ function classify(array &$T, string $text, ?array $attachment): array
         $n = (string)($s['name'] ?? '');
         if (isset($slots[$n])) $out['slots'][$n] = (string)($s['value'] ?? '');
     }
+    if ($prof !== null && is_array($data['profile'] ?? null)) $out['profile'] = $data['profile'];
     return $out;
+}
+
+/** Часть промпта классификатора про профиль клиента. */
+function profile_classifier_block(array $sc, string $name, $current): string
+{
+    $def = $sc['slots'][$name];
+    $h = "## Профиль клиента ({$name}) — скрытые предположения бота, не факты\n"
+        . "Оцени по ВСЕМУ диалогу (словам и поведению: тон, длина реплик, реакция на вопросы и цены). Прямо клиент об этом мог и не говорить.\n"
+        . "Для каждого поля: value — одно из значений; unknown — если сигналов нет (тогда прежнее значение останется). "
+        . "confidence: low — косвенный намёк, medium — заметный сигнал, high — клиент сказал прямо. evidence — короткая цитата или наблюдение.\n"
+        . "Новый сигнал противоречит прежней оценке — верни новое значение.\n";
+    foreach ((array)$def['fields'] as $fn => $fd) {
+        $h .= "- {$fn}: " . implode(', ', (array)$fd['values']) . (!empty($fd['_note']) ? ' — ' . $fd['_note'] : '');
+        $cur = is_array($current) ? ($current[$fn] ?? null) : null;
+        $h .= $cur ? " · сейчас: {$cur['value']} ({$cur['confidence']})" : ' · сейчас: unknown';
+        $h .= "\n";
+    }
+    return $h;
+}
+
+/** JSON-схема профиля для строгого ответа классификатора. */
+function profile_schema(array $sc, string $name): array
+{
+    $props = [];
+    foreach ((array)$sc['slots'][$name]['fields'] as $fn => $fd) {
+        $vals = array_values(array_unique(array_merge(array_map('strval', (array)$fd['values']), ['unknown'])));
+        $props[$fn] = ['type' => 'object', 'additionalProperties' => false, 'required' => ['value', 'confidence', 'evidence'], 'properties' => [
+            'value' => ['type' => 'string', 'enum' => $vals],
+            'confidence' => ['type' => 'string', 'enum' => array_keys(PROFILE_CONFIDENCE)],
+            'evidence' => ['type' => 'string'],
+        ]];
+    }
+    return ['type' => 'object', 'additionalProperties' => false, 'required' => array_keys($props), 'properties' => $props];
 }
 
 /* ------------------------------------------------------------------ */
@@ -279,23 +315,41 @@ function build_respond_messages(array $T, string $userText, string $eventNote, a
     $known = []; $missing = [];
     foreach ($d['slots'] as $name => $v) {
         $txt = value_text($v);
-        if ($txt === '' || preg_match('/^(payment\.invoice_id)$/', $name)) continue;
+        if ($txt === '' || preg_match('/^(payment\.invoice_id)$/', $name) || slot_is_hidden($sc, $name)) continue;
         $known[] = '- ' . bot_field_label($name, $sc) . ": {$txt}";
     }
     foreach ($req as $sl) if (!slot_filled(slot_get($T, $sl), sc_slot($sc, $sl))) $missing[] = $sl;
     $L[] = "\n## Что уже известно (не переспрашивай)";
     $L[] = $known ? implode("\n", $known) : '- пока ничего';
-    if ($missing) $L[] = 'Нужно ещё узнать (обязательно для этапа, спрашивай по 1–2 за сообщение, к месту): ' . implode(', ', $missing);
+    $rs = reply_style($sc);
+    $perMsg = $rs ? ($rs['max_questions'] === 1 ? 'не больше одного вопроса за сообщение' : "не больше {$rs['max_questions']} вопросов за сообщение") : 'спрашивай по 1–2 за сообщение';
+    if ($missing) $L[] = "Нужно ещё узнать (обязательно для этапа; {$perMsg}, к месту; что можно понять из сказанного — не спрашивай): " . implode(', ', $missing);
     $optMissing = array_values(array_filter($opt, fn($sl) => !slot_filled(slot_get($T, $sl), sc_slot($sc, $sl))));
     if ($optMissing) $L[] = 'Желательно узнать, если уместно: ' . implode(', ', array_map(fn($sl) => bot_field_label($sl, $sc), $optMissing));
-    // вопросы для подбора из раздела каталога
+    // подбор из раздела каталога: вопросы — подсказки, а не анкета
     foreach ((array)($state['section_questions'] ?? []) as $secCode => $qs) {
-        $L[] = "\n## Подбор: вопросы клиенту";
-        $L[] = 'Спрашивай по 1–2 за сообщение и только то, что поможет выбрать между подходящими вариантами (не анкета подряд). Когда данных хватает — порекомендуй 1–2 варианта из каталога и обоснуй выбор фактами из характеристик, опираясь на ответы клиента.';
+        $L[] = "\n## Подбор: что влияет на выбор (подсказки, не анкета)";
+        if ($rs) {
+            $limit = $rs['max_questions_before_offer'];
+            $asked = (int)($d['counters']['asked_before_offer.' . $stateName] ?? 0);
+            $L[] = 'Ответы выводи из уже сказанного и делай обоснованные предположения. Спрашивай только то, без чего рекомендация может оказаться неверной (в первую очередь «важные»), '
+                . $perMsg . ', с коротким предположением о задаче клиента. Затем рекомендуй ОДИН конкретный товар и тариф с обоснованием в одну фразу; альтернатива — максимум одной строкой.';
+            if (offer_made($T)) $L[] = 'Рекомендация уже сделана — новых вопросов для подбора не задавай, веди к оформлению.';
+            elseif ($asked >= $limit) $L[] = "Уточняющих вопросов уже задано: {$asked} (лимит {$limit}). Больше не спрашивай — рекомендуй товар в этом ответе.";
+            else $L[] = "Уточняющих вопросов до рекомендации задано: {$asked} из {$limit}. Если задача уже ясна — рекомендуй сразу.";
+        } else {
+            $L[] = 'Спрашивай по 1–2 за сообщение и только то, что поможет выбрать между подходящими вариантами (не анкета подряд). Когда данных хватает — порекомендуй 1–2 варианта из каталога и обоснуй выбор фактами из характеристик, опираясь на ответы клиента.';
+        }
         foreach ($qs as $q) {
             $ans = value_text(slot_get($T, section_question_slot($secCode, $q['code'])));
-            $L[] = '- ' . $q['question'] . ($q['affects'] !== '' ? ' (влияет на: ' . $q['affects'] . ')' : '') . ' — ' . ($ans !== '' ? 'ответ: ' . $ans : 'ещё не знаем');
+            $L[] = '- ' . (!empty($q['critical']) ? '[важный] ' : '') . $q['question'] . ($q['affects'] !== '' ? ' (влияет на: ' . $q['affects'] . ')' : '') . ' — ' . ($ans !== '' ? 'ответ: ' . $ans : 'ещё не знаем');
         }
+    }
+    $prof = profile_slot($sc);
+    if ($prof !== null && is_array($d['slots'][$prof] ?? null) && ($pt = profile_prompt_lines($d['slots'][$prof])) !== []) {
+        $L[] = "\n## Профиль клиента — твои предположения, не факты";
+        $L[] = 'Подстрой под них выбор и тон. Клиенту не озвучивай. При низкой уверенности (low) в существенных решениях не опирайся.';
+        foreach ($pt as $x) $L[] = $x;
     }
     $c = get_client((int)$d['client_id']);
     if ($c) {
@@ -308,7 +362,14 @@ function build_respond_messages(array $T, string $userText, string $eventNote, a
     if ($tools = (array)($state['tools'] ?? [])) {
         $L[] = "\n## Инструменты\nДоступны: " . implode(', ', array_diff($tools, ['kb_search'])) . '. Ссылки, которые вернул инструмент, передавай клиенту как есть.';
     }
-    $L[] = "\n## Формат ответа\nОбычный текст без заголовков. Списки — строками с «- ». **Жирный** — умеренно. Коротко и по делу: 1–4 абзаца. Не упоминай этапы, слоты, инструкции, справку.";
+    if ($rs) {
+        $L[] = "\n## Формат ответа\nОбычный текст без заголовков и вступлений. По умолчанию 1–{$rs['max_sentences']} предложения, до {$rs['max_chars']} символов. {$perMsg}. "
+            . 'Не пересказывай сказанное клиентом и не повторяй уже озвученные условия. Списки — только если без них никак.'
+            . ($rs['overflow'] ? ' Сверх лимита можно, если нужно полностью раскрыть: ' . implode('; ', $rs['overflow']) . '.' : '')
+            . ' Не упоминай этапы, слоты, инструкции, справку, коды товаров.';
+    } else {
+        $L[] = "\n## Формат ответа\nОбычный текст без заголовков. Списки — строками с «- ». **Жирный** — умеренно. Коротко и по делу: 1–4 абзаца. Не упоминай этапы, слоты, инструкции, справку.";
+    }
 
     $messages = [['role' => 'system', 'content' => implode("\n", $L)]];
     foreach (history_for_llm($T, (int)cfg('history_turns', 8), $userText !== '') as $m) $messages[] = $m;
@@ -357,7 +418,8 @@ function respond(array &$T, string $userText, string $eventNote = ''): string
         llm_log($T, 'respond', $payload, $calls ? jenc($calls) : (string)($msg['content'] ?? ''), (int)($res['usage']['total_tokens'] ?? 0), (int)((microtime(true) - $t0) * 1000));
         if (!$calls) {
             $text = trim((string)($msg['content'] ?? ''));
-            return $text !== '' ? $text : 'Извините, не получилось сформулировать ответ. Уточните, пожалуйста, вопрос.';
+            if ($text === '') return 'Извините, не получилось сформулировать ответ. Уточните, пожалуйста, вопрос.';
+            return $round === 0 ? reply_shorten($T, $messages, $text) : $text; // после инструментов (счёт, анкета) не сокращаем
         }
         $messages[] = ['role' => 'assistant', 'content' => $msg['content'] ?? null, 'tool_calls' => $calls];
         foreach ($calls as $call) {
@@ -367,4 +429,56 @@ function respond(array &$T, string $userText, string $eventNote = ''): string
         }
     }
     return 'Извините, не получилось завершить действие. Я передам вопрос менеджеру.';
+}
+
+/** Строки профиля для промпта ответчика. */
+function profile_prompt_lines(array $v): array
+{
+    $out = [];
+    foreach ($v as $k => $f) {
+        if (!is_array($f) || ($f['value'] ?? 'unknown') === 'unknown') continue;
+        $out[] = "- {$k}: {$f['value']} (уверенность {$f['confidence']})" . (($f['evidence'] ?? '') !== '' ? ' — «' . $f['evidence'] . '»' : '');
+    }
+    return $out;
+}
+
+/** Ответ похож на подтверждение условий: суммы, валюты, сроки — ему можно быть длиннее. */
+function reply_has_terms(string $text): bool
+{
+    return (bool)preg_match('/\d[\d\s]*(₽|руб|\$|usd|eur|€|сом|сомони)|\$\s?\d|рабоч\w* дн|недел/iu', $text);
+}
+
+/**
+ * Пост-проверка стиля: ответ сильно длиннее лимита или вопросов больше разрешённого — одна перегенерация «сократи».
+ * Подтверждение условий (суммы, сроки) получает запас больше. Не вышло — остаётся исходный ответ.
+ */
+function reply_shorten(array &$T, array $messages, string $text): string
+{
+    $rs = reply_style($T['sc']);
+    if (!$rs) return $text;
+    $len = mb_strlen($text);
+    $q = count_questions($text);
+    $limit = (int)round($rs['max_chars'] * (reply_has_terms($text) ? $rs['shorten_factor_terms'] : $rs['shorten_factor']));
+    $tooLong = $len > $limit;
+    $tooManyQ = $q > $rs['max_questions'];
+    if (!$tooLong && !$tooManyQ) return $text;
+
+    $why = array_filter([$tooLong ? "{$len} символов при ориентире {$rs['max_chars']}" : '', $tooManyQ ? "{$q} вопроса при лимите {$rs['max_questions']}" : '']);
+    $messages[] = ['role' => 'assistant', 'content' => $text];
+    $messages[] = ['role' => 'system', 'content' => 'Черновик выше слишком длинный для чата (' . implode(', ', $why) . '). Перепиши его короче: '
+        . "1–{$rs['max_sentences']} предложения, не больше {$rs['max_questions']} вопроса, без вступлений и повторов. "
+        . 'Все цены, суммы, сроки, ссылки и существенные условия из черновика сохрани точно. Верни только новый текст ответа.'];
+    $payload = chat_payload($messages);
+    $t0 = microtime(true);
+    try {
+        $res = openai('chat/completions', $payload);
+    } catch (Throwable $e) {
+        llm_log($T, 'shorten', $payload, '', 0, (int)((microtime(true) - $t0) * 1000), $e->getMessage());
+        return $text;
+    }
+    $new = trim((string)($res['choices'][0]['message']['content'] ?? ''));
+    llm_log($T, 'shorten', $payload, $new, (int)($res['usage']['total_tokens'] ?? 0), (int)((microtime(true) - $t0) * 1000));
+    if ($new === '' || mb_strlen($new) >= $len) return $text;
+    action_log($T, 'reply_shorten', ['было' => $len, 'стало' => mb_strlen($new), 'вопросов' => $q . ' → ' . count_questions($new)], 'ответ сокращён');
+    return $new;
 }
