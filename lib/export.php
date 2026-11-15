@@ -65,7 +65,7 @@ function dialog_export_txt(int $id): string
     foreach ($d['slots'] as $name => $v) {
         $txt = value_text($v);
         if ($txt === '') continue;
-        $L[] = '- ' . bot_field_label($name, $sc) . ' [' . $name . ']: ' . $txt;
+        $L[] = '- ' . bot_field_label($name, $sc) . ' [' . $name . ']' . (slot_is_hidden($sc, $name) ? ' (скрыто, предположение бота)' : '') . ': ' . $txt;
         $any = true;
     }
     if (!$any) $L[] = '- нет';

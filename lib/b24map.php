@@ -346,6 +346,7 @@ function b24_fields_from_slots(array $T, string $entity, string $mask = 'all'): 
         $virtual = str_starts_with($name, '@');
         if (!$virtual && $mask !== 'all' && !fnmatch($mask, $name)) continue;
         if (preg_match(BOT_INTERNAL_SLOTS, $name)) continue;
+        if (!$virtual && slot_is_hidden($sc, $name)) continue; // профиль клиента и др. скрытые — в CRM не пишем
         if (str_starts_with($name, 'client.')) continue; // клиентские поля — отдельно (ФИО, e-mail, мессенджер)
         $def = sc_slot($sc, $name);
         $type = $def['type'] ?? 'string';

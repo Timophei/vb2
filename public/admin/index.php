@@ -232,7 +232,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($code === '') throw new RuntimeException('Нужен код раздела.');
                 $qs = [];
                 $q = (array)($_POST['q'] ?? []);
-                foreach ((array)($q['code'] ?? []) as $i => $c) $qs[] = ['code' => $c, 'question' => $q['question'][$i] ?? '', 'options' => $q['options'][$i] ?? '', 'affects' => $q['affects'][$i] ?? ''];
+                foreach ((array)($q['code'] ?? []) as $i => $c) $qs[] = ['code' => $c, 'question' => $q['question'][$i] ?? '', 'options' => $q['options'][$i] ?? '', 'affects' => $q['affects'][$i] ?? '', 'critical' => $q['critical'][$i] ?? ''];
                 section_save($code, (string)($_POST['name'] ?? ''), $qs);
                 go('tab=catalog&sec=' . urlencode($code), 'Раздел «' . $code . '» сохранён. Вопросы подхватятся в новых ходах диалога.');
             case 'catalog_import':

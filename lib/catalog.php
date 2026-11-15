@@ -132,10 +132,18 @@ function section_save(string $code, string $name, array $questions): void
         $c = strtolower(trim((string)($q['code'] ?? '')));
         $c = preg_replace('/[^a-z0-9_]/', '_', $c);
         if ($c === '' || trim((string)($q['question'] ?? '')) === '') continue;
-        $qs[] = ['code' => $c, 'question' => trim((string)$q['question']), 'options' => trim((string)($q['options'] ?? '')), 'affects' => trim((string)($q['affects'] ?? ''))];
+        $qs[] = ['code' => $c, 'question' => trim((string)$q['question']), 'options' => trim((string)($q['options'] ?? '')), 'affects' => trim((string)($q['affects'] ?? '')),
+            'critical' => question_flag($q['critical'] ?? false)];
     }
     db()->prepare('INSERT INTO catalog_sections(code, name, questions) VALUES(?,?,?) ON CONFLICT(code) DO UPDATE SET name = excluded.name, questions = excluded.questions')
         ->execute([normalize_section($code), trim($name), jenc($qs)]);
+}
+
+/** «Важный» вопрос подбора: без ответа рекомендация может оказаться неверной. Принимает bool, «да», «1», «+». */
+function question_flag($v): bool
+{
+    if (is_bool($v)) return $v;
+    return in_array(mb_strtolower(trim((string)$v)), ['1', 'да', 'yes', 'true', '+', 'важный', 'важно'], true);
 }
 
 /** Слот ответа на вопрос раздела. */
