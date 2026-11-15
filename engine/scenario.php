@@ -307,6 +307,7 @@ function reply_style(array $sc): ?array
         'max_sentences' => max(1, (int)($rs['max_sentences'] ?? 3)),
         'max_chars' => max(80, (int)($rs['max_chars'] ?? 300)),
         'max_questions' => max(1, (int)($rs['max_questions'] ?? 1)),
+        'min_questions_before_offer' => max(0, (int)($rs['min_questions_before_offer'] ?? 0)),
         'max_questions_before_offer' => max(0, (int)($rs['max_questions_before_offer'] ?? 2)),
         'overflow' => array_values(array_filter((array)($rs['overflow_allowed_for'] ?? []), 'is_string')),
         'shorten_factor' => max(1.0, (float)($rs['shorten_factor'] ?? 1.5)),

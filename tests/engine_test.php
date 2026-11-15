@@ -519,7 +519,7 @@ say($dlg, 'нужна карта, часто езжу и плачу подпис
 check(isset($GLOBALS['LAST_CLS_SCHEMA']['properties']['profile']) && str_contains($GLOBALS['LAST_CLS_PROMPT'], '## Профиль клиента'), 'классификатор получает блок и схему профиля');
 check(!isset(dialog_load($dlg)['slots']['client.profile']), 'всё unknown — профиль не заводится');
 check(str_contains($GLOBALS['LAST_PROMPT'], 'до 300 символов') && !str_contains($GLOBALS['LAST_PROMPT'], '1–4 абзаца'), 'лимиты reply_style в промпте вместо «1–4 абзаца»');
-check(str_contains($GLOBALS['LAST_PROMPT'], 'задано 0 из 2'), 'счётчик вопросов до рекомендации: 0 из 2');
+check(str_contains($GLOBALS['LAST_PROMPT'], 'рекомендовать можно не раньше чем после 2'), 'до min вопросов рекомендовать рано');
 check(str_contains($GLOBALS['LAST_PROMPT'], 'первый ответ в диалоге: начни с короткого приветствия'), 'первый ответ — просьба поздороваться');
 check((bool)preg_match('/Для чего карта[^\n]*Варианты: [^\n]*\(для тебя — влияет на:/u', $GLOBALS['LAST_PROMPT']), 'у вопроса подбора — варианты для клиента и служебная пометка «для тебя»');
 check((int)(dialog_load($dlg)['counters']['asked_before_offer.cards'] ?? 0) === 1, 'бот задал вопрос — счётчик 1');
@@ -530,7 +530,7 @@ check((int)(dialog_load($dlg)['counters']['asked_before_offer.cards'] ?? 0) === 
 $pr = dialog_load($dlg)['slots']['client.profile'] ?? [];
 check(($pr['decision_style']['value'] ?? '') === 'fast' && !isset($pr['price_priority']), 'профиль: заведено только то, на что есть сигнал');
 say($dlg, 'давай самый жирный');
-check(str_contains($GLOBALS['LAST_PROMPT'], 'лимит 2') && str_contains($GLOBALS['LAST_PROMPT'], 'рекомендуй товар в этом ответе'), 'лимит исчерпан — промпт велит рекомендовать');
+check(str_contains($GLOBALS['LAST_PROMPT'], 'задано 2 из 3') && !str_contains($GLOBALS['LAST_PROMPT'], 'не раньше чем'), 'после min вопросов — можно рекомендовать');
 check(str_contains($GLOBALS['LAST_PROMPT'], '## Профиль клиента') && str_contains($GLOBALS['LAST_PROMPT'], 'price_priority: low (уверенность high)'), 'профиль передан ответчику как предположения');
 $kn = explode('## Подбор', explode('## Что уже известно', $GLOBALS['LAST_PROMPT'])[1] ?? '')[0];
 check(!str_contains($kn, 'price_priority'), 'профиля нет в списке «что известно»');
@@ -545,6 +545,18 @@ $T = turn_init(dialog_load($dlg));
 [$fl, $cm] = b24_fields_from_slots($T, 'lead');
 check(!str_contains(jenc($fl) . implode("\n", $cm), 'price_priority'), 'профиль не уходит в поля и комментарий Битрикса');
 check(str_contains(dialog_export_txt($dlg), '(скрыто, предположение бота)'), 'в выгрузке диалога профиль помечен как предположение');
+$GLOBALS['CLS']['нужна карта'] = ['cards', []];
+$GLOBALS['CLS']['ну'] = ['none', []];
+$dlg2 = new_dialog('web:init2');
+say($dlg2, 'нужна карта');
+$dd = dialog_load($dlg2); $dd['counters']['asked_before_offer.cards'] = 3; dialog_save($dd);
+say($dlg2, 'ну');
+check(str_contains($GLOBALS['LAST_PROMPT'], 'лимит 3') && str_contains($GLOBALS['LAST_PROMPT'], 'рекомендуй в этом ответе'), 'max исчерпан — промпт велит рекомендовать');
+$GLOBALS['CLS']['давай быстрее, некогда'] = ['none', [], ['decision_style' => ['value' => 'fast', 'confidence' => 'high', 'evidence' => 'некогда']]];
+$dlg3 = new_dialog('web:init3');
+say($dlg3, 'нужна карта');
+say($dlg3, 'давай быстрее, некогда');
+check(!str_contains($GLOBALS['LAST_PROMPT'], 'не раньше чем'), 'торопливому клиенту нижний порог не держим');
 $GLOBALS['REPLY'] = []; $GLOBALS['SHORT'] = null;
 
 echo "\n" . ($fails ? "ПРОВАЛЕНО: $fails" : 'Все проверки пройдены') . "\n";

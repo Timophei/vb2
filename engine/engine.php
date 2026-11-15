@@ -652,3 +652,11 @@ function reply_names_product(string $reply, array $sections): bool
     }
     return false;
 }
+
+/** Клиент торопится: по профилю decision_style = fast с уверенностью medium/high. Тогда нижний порог вопросов не держим. */
+function client_in_hurry(array $T): bool
+{
+    $name = profile_slot($T['sc']);
+    $f = $name !== null ? ($T['d']['slots'][$name]['decision_style'] ?? null) : null;
+    return is_array($f) && ($f['value'] ?? '') === 'fast' && (PROFILE_CONFIDENCE[$f['confidence'] ?? 'low'] ?? 1) >= 2;
+}
