@@ -248,7 +248,7 @@ function tool_specs(array $T, array $state): array
             case 'send_form_link':
                 $specs[] = ['type' => 'function', 'function' => [
                     'name' => 'send_form_link',
-                    'description' => 'Получить ссылку на форму анкеты (паспортные и личные данные клиент заполняет там, не в чате). Ссылку передай клиенту.',
+                    'description' => 'Получить ссылку на форму анкеты (паспортные и личные данные клиент заполняет там, не в чате). Вызывай ТОЛЬКО когда клиент выбрал конкретный товар и сказал, что готов оформлять; на вопросы о том, как всё устроено, не вызывай. Один раз за ответ. Ссылку передай клиенту.',
                     'parameters' => ['type' => 'object', 'additionalProperties' => false, 'required' => ['product_id'], 'properties' => [
                         'product_id' => ['type' => 'string', 'enum' => $products ?: ['none']],
                     ]],
