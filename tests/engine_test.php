@@ -519,9 +519,12 @@ say($dlg, 'нужна карта, часто езжу и плачу подпис
 check(isset($GLOBALS['LAST_CLS_SCHEMA']['properties']['profile']) && str_contains($GLOBALS['LAST_CLS_PROMPT'], '## Профиль клиента'), 'классификатор получает блок и схему профиля');
 check(!isset(dialog_load($dlg)['slots']['client.profile']), 'всё unknown — профиль не заводится');
 check(str_contains($GLOBALS['LAST_PROMPT'], 'до 300 символов') && !str_contains($GLOBALS['LAST_PROMPT'], '1–4 абзаца'), 'лимиты reply_style в промпте вместо «1–4 абзаца»');
-check(str_contains($GLOBALS['LAST_PROMPT'], 'задано: 0 из 2'), 'счётчик вопросов до рекомендации: 0 из 2');
+check(str_contains($GLOBALS['LAST_PROMPT'], 'задано 0 из 2'), 'счётчик вопросов до рекомендации: 0 из 2');
+check(str_contains($GLOBALS['LAST_PROMPT'], 'первый ответ в диалоге: начни с короткого приветствия'), 'первый ответ — просьба поздороваться');
+check((bool)preg_match('/Для чего карта[^\n]*Варианты: [^\n]*\(для тебя — влияет на:/u', $GLOBALS['LAST_PROMPT']), 'у вопроса подбора — варианты для клиента и служебная пометка «для тебя»');
 check((int)(dialog_load($dlg)['counters']['asked_before_offer.cards'] ?? 0) === 1, 'бот задал вопрос — счётчик 1');
 $out = say($dlg, 'можно 7–10 дней');
+check(!str_contains($GLOBALS['LAST_PROMPT'], 'первый ответ в диалоге'), 'дальше приветствие не просим');
 check($GLOBALS['SHORTEN_CALLS'] === 1 && ($out[0] ?? '') === $GLOBALS['SHORT'], 'длинный ответ с двумя вопросами сокращён одной перегенерацией');
 check((int)(dialog_load($dlg)['counters']['asked_before_offer.cards'] ?? 0) === 2, 'второй вопрос — счётчик 2');
 $pr = dialog_load($dlg)['slots']['client.profile'] ?? [];
