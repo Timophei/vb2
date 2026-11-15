@@ -518,7 +518,7 @@ $dlg = new_dialog('web:init1');
 say($dlg, 'нужна карта, часто езжу и плачу подписки');
 check(isset($GLOBALS['LAST_CLS_SCHEMA']['properties']['profile']) && str_contains($GLOBALS['LAST_CLS_PROMPT'], '## Профиль клиента'), 'классификатор получает блок и схему профиля');
 check(!isset(dialog_load($dlg)['slots']['client.profile']), 'всё unknown — профиль не заводится');
-check(str_contains($GLOBALS['LAST_PROMPT'], 'до 300 символов') && !str_contains($GLOBALS['LAST_PROMPT'], '1–4 абзаца'), 'лимиты reply_style в промпте вместо «1–4 абзаца»');
+check(str_contains($GLOBALS['LAST_PROMPT'], 'около 300 символов') && str_contains($GLOBALS['LAST_PROMPT'], 'Не склеивай пункты через') && !str_contains($GLOBALS['LAST_PROMPT'], '1–4 абзаца'), 'лимиты reply_style в промпте вместо «1–4 абзаца»');
 check(str_contains($GLOBALS['LAST_PROMPT'], 'рекомендовать можно не раньше чем после 3'), 'до min вопросов рекомендовать рано');
 check(str_contains($GLOBALS['LAST_PROMPT'], 'первый ответ в диалоге: начни с короткого приветствия'), 'первый ответ — просьба поздороваться');
 check((bool)preg_match('/Для чего карта[^\n]*Варианты: [^\n]*\(для тебя — влияет на:/u', $GLOBALS['LAST_PROMPT']), 'у вопроса подбора — варианты для клиента и служебная пометка «для тебя»');

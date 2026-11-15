@@ -310,6 +310,7 @@ function reply_style(array $sc): ?array
         'min_questions_before_offer' => max(0, (int)($rs['min_questions_before_offer'] ?? 0)),
         'max_questions_before_offer' => max(0, (int)($rs['max_questions_before_offer'] ?? 2)),
         'overflow' => array_values(array_filter((array)($rs['overflow_allowed_for'] ?? []), 'is_string')),
+        'format' => array_values(array_filter((array)($rs['format'] ?? []), fn($x) => is_string($x) && trim($x) !== '')),
         'shorten_factor' => max(1.0, (float)($rs['shorten_factor'] ?? 1.5)),
         'shorten_factor_terms' => max(1.0, (float)($rs['shorten_factor_terms'] ?? 3.0)),
     ];
