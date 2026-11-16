@@ -258,7 +258,7 @@ function tool_specs(array $T, array $state): array
             case 'biometry_check':
                 $specs[] = ['type' => 'function', 'function' => [
                     'name' => 'biometry_check',
-                    'description' => 'Проверить по реестру, есть ли места на биометрию. Ответ: yes / no / unknown. Клиенту называй только «есть места» / «мест нет» / «нет данных», без дат и времени.',
+                    'description' => 'Проверить по реестру, есть ли места на биометрию. Вызывай, только когда клиент спросил о местах или записи. Ответ: yes / no / unknown. Клиенту называй только «есть места» / «мест нет»; unknown — «наличие мест уточнит менеджер». Без дат и времени.',
                     'parameters' => ['type' => 'object', 'additionalProperties' => false, 'required' => ['country', 'city'], 'properties' => [
                         'country' => ['type' => 'string'], 'city' => ['type' => 'string'],
                     ]],

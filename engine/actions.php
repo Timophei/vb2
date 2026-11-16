@@ -359,7 +359,7 @@ function tool_biometry_check(array &$T, array $args): array
     if ($counter !== '') slot_set($T, $counter, (int)($T['d']['slots'][$counter] ?? 0) + 1);
     $src = (string)($T['sc']['catalog_refs']['biometry_registry'] ?? '');
     // Реестр биометрии ещё не подключён (Excel) — честно «нет данных».
-    return ['answer' => 'unknown', 'note' => is_todo($src) || $src === '' ? 'реестр мест не подключён' : 'реестр не прочитан'];
+    return ['answer' => 'unknown', 'note' => (is_todo($src) || $src === '' ? 'реестр мест не подключён' : 'реестр не прочитан') . '. Скажи клиенту, что наличие мест уточнит менеджер; ничего не предполагай.'];
 }
 
 /** Оплата прошла / не прошла (демо-страница или эквайринг). */
