@@ -16,6 +16,7 @@ require_once __DIR__ . '/clients.php';
 require_once __DIR__ . '/catalog.php';
 require_once __DIR__ . '/catalog_io.php';
 require_once __DIR__ . '/export.php';
+require_once __DIR__ . '/pages.php';
 require_once __DIR__ . '/telegram.php';
 require_once __DIR__ . '/bitrix.php';
 require_once __DIR__ . '/b24map.php';
@@ -242,6 +243,12 @@ function migrate(PDO $pdo): void
     // текстовые заметки базы знаний (правятся в админке) и разделы каталога
     if (!in_array('body', array_column($pdo->query('PRAGMA table_info(documents)')->fetchAll(), 'name'), true)) $pdo->exec('ALTER TABLE documents ADD COLUMN body TEXT');
     $pdo->exec("CREATE TABLE IF NOT EXISTS catalog_sections (code TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', questions TEXT NOT NULL DEFAULT '[]', sort INTEGER NOT NULL DEFAULT 100)");
+    // страницы-документы (меморандумы и т. п.): markdown, публичный адрес /doc/?slug
+    $pdo->exec("CREATE TABLE IF NOT EXISTS pages (slug TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', md TEXT NOT NULL DEFAULT '', published INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')), updated_by TEXT NOT NULL DEFAULT '')");
+    if (!$pdo->query("SELECT 1 FROM pages WHERE slug = 'memo'")->fetch() && is_file(BOT_ROOT . '/docs/memo.md')) {
+        $md = (string)file_get_contents(BOT_ROOT . '/docs/memo.md');
+        $pdo->prepare("INSERT INTO pages (slug, title, md) VALUES ('memo', ?, ?)")->execute([page_title_from_md($md), $md]);
+    }
 }
 
 /* ------------------------------------------------------------------ */

@@ -278,6 +278,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($fn = $st->fetchColumn()) @unlink(data_dir() . '/files/' . basename($fn));
                 delete_document((int)$_POST['id']);
                 go('tab=docs', 'Удалено.');
+            case 'page_save':
+                try {
+                    $slug = page_save((string)$_POST['slug'], (string)$_POST['md'], !empty($_POST['published']), (string)($me['name'] ?? $me['login'] ?? ''), (string)($_POST['orig'] ?? ''));
+                } catch (RuntimeException $e) {
+                    $_SESSION['page_draft'] = ['slug' => (string)$_POST['slug'], 'md' => (string)$_POST['md'], 'published' => !empty($_POST['published']), 'orig' => (string)($_POST['orig'] ?? '')];
+                    go('tab=pages&edit=' . urlencode((string)($_POST['orig'] ?? '') ?: '_new'), 'Ошибка: ' . $e->getMessage());
+                }
+                go('tab=pages&edit=' . urlencode($slug), 'Страница сохранена — открыта по адресу ' . page_url($slug));
+            case 'page_delete':
+                page_delete((string)$_POST['slug']);
+                go('tab=pages', 'Страница удалена.');
             case 'note_save':
                 $nid = save_note((int)($_POST['id'] ?? 0), (string)$_POST['title'], (string)$_POST['section'], (string)$_POST['text'], (string)($_POST['trust'] ?? 'main'));
                 go('tab=docs&note=' . $nid, 'Заметка сохранена — бот уже видит новый текст.');
@@ -379,7 +390,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-$tabs = ['dialogs' => 'Диалоги', 'sandbox' => 'Песочница', 'scenario' => 'Сценарий', 'catalog' => 'Каталог', 'docs' => 'Материалы', 'bitrix' => 'Битрикс24', 'settings' => 'Настройки'];
+$tabs = ['dialogs' => 'Диалоги', 'sandbox' => 'Песочница', 'scenario' => 'Сценарий', 'catalog' => 'Каталог', 'docs' => 'Материалы', 'pages' => 'Страницы', 'bitrix' => 'Битрикс24', 'settings' => 'Настройки'];
 if (can('users')) $tabs['users'] = 'Пользователи';
 if (!isset($tabs[$tab]) && $tab !== 'me') $tab = 'dialogs';
 $wide = in_array($tab, ['dialogs', 'sandbox'], true);
@@ -405,6 +416,7 @@ switch ($tab) {
     case 'scenario': view_scenario($view); break;
     case 'catalog': view_catalog(); break;
     case 'docs': view_docs($view); break;
+    case 'pages': view_pages(); break;
     case 'settings': view_settings($view); break;
     case 'bitrix': view_bitrix($view); break;
     case 'users': view_users($me); break;

@@ -903,3 +903,85 @@ function view_me(array $me): void
     </form>
     <?php
 }
+
+/* ------------------------------------------------------------------ */
+/*  Страницы-документы                                                 */
+/* ------------------------------------------------------------------ */
+
+function view_pages(): void
+{
+    $list = page_list();
+    $edit = (string)($_GET['edit'] ?? '');
+    $draft = $_SESSION['page_draft'] ?? null; unset($_SESSION['page_draft']);
+    $host = 'https://' . ($_SERVER['HTTP_HOST'] ?? '');
+    $p = null;
+    if ($draft) $p = $draft;
+    elseif ($edit !== '' && $edit !== '_new' && ($row = page_get($edit))) $p = ['slug' => $row['slug'], 'md' => $row['md'], 'published' => (bool)$row['published'], 'orig' => $row['slug']];
+    $isNew = !$p || ($p['orig'] ?? '') === '';
+    $p ??= ['slug' => '', 'md' => '', 'published' => true, 'orig' => ''];
+    ?>
+    <div class="card">
+      <h2>Страницы</h2>
+      <p class="hint">Документы для клиентов и партнёров — меморандумы, предложения, инструкции. Пишутся в Markdown, открываются по постоянной ссылке на телефоне и компьютере, скачиваются в PDF с датой скачивания. Поисковики их не индексируют.</p>
+      <?php if ($list): ?>
+      <table class="clients">
+        <tr><th>Документ</th><th>Адрес</th><th>Обновлён</th><th></th></tr>
+        <?php foreach ($list as $r): $url = page_url($r['slug']); ?>
+          <tr class="<?= $r['published'] ? '' : 'off' ?>">
+            <td><a href="?tab=pages&edit=<?= urlencode($r['slug']) ?>"><?= h($r['title'] ?: $r['slug']) ?></a><?= $r['published'] ? '' : ' <small class="bad">снят с публикации</small>' ?></td>
+            <td><a href="<?= h($url) ?>" target="_blank"><?= h($_SERVER['HTTP_HOST'] ?? '') . h($url) ?></a></td>
+            <td class="nw"><?= h(fmt_dt($r['updated_at'])) ?><?= $r['updated_by'] !== '' ? '<br><small class="muted">' . h($r['updated_by']) . '</small>' : '' ?></td>
+            <td class="nw"><a href="<?= h($url . (str_contains($url, '?') ? '&' : '?') . 'pdf') ?>">PDF</a></td>
+          </tr>
+        <?php endforeach; ?>
+      </table>
+      <?php endif; ?>
+      <?php if (!$isNew): ?><p><a href="?tab=pages">+ Новая страница</a></p><?php endif; ?>
+    </div>
+
+    <form method="post" class="card" id="pform">
+      <?= csrf_field('page_save', ['orig' => $p['orig'] ?? '']) ?>
+      <h2><?= $isNew ? 'Новая страница' : 'Редактирование' ?></h2>
+      <div class="drop" id="drop">
+        <b>Перетащите сюда .md-файл</b> или <label class="pick">выберите<input type="file" id="mdfile" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden></label>
+        <small><?= $isNew ? 'Текст подставится ниже, адрес — из имени файла.' : 'Текст заменит содержимое этой страницы — адрес останется прежним.' ?> Заголовок документа — первая строка «# …».</small>
+      </div>
+      <div class="grid">
+        <label>Адрес страницы
+          <div class="slug"><span><?= h($_SERVER['HTTP_HOST'] ?? '') ?>/doc/?</span><input name="slug" id="slug" value="<?= h($p['slug']) ?>" required pattern="[a-z0-9][a-z0-9_\-]{1,39}" placeholder="memo-partner" title="латиница, цифры, - и _"></div>
+        </label>
+        <label class="row" style="margin-top:28px"><input type="checkbox" name="published" value="1" <?= !empty($p['published']) ? 'checked' : '' ?>> Опубликована (открывается по ссылке)</label>
+      </div>
+      <label>Текст (Markdown)<textarea name="md" id="md" rows="22" required spellcheck="true"><?= h($p['md']) ?></textarea></label>
+      <button>Сохранить</button>
+      <?php if (!$isNew): ?> <a href="<?= h(page_url($p['orig'])) ?>" target="_blank">Открыть страницу ↗</a><?php endif; ?>
+    </form>
+    <?php if (!$isNew): ?>
+      <form method="post" class="inline" onsubmit="return confirm('Удалить страницу? Ссылка перестанет открываться.')"><?= csrf_field('page_delete', ['slug' => $p['orig']]) ?><button class="danger">Удалить страницу</button></form>
+    <?php endif; ?>
+    <script>
+    (() => {
+      const drop = document.getElementById('drop'), md = document.getElementById('md'), slug = document.getElementById('slug'), isNew = <?= $isNew ? 'true' : 'false' ?>;
+      const tr = {а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'c',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya'};
+      const toSlug = s => s.toLowerCase().replace(/\.(md|markdown|txt)$/, '').split('').map(c => tr[c] ?? c).join('').replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+      const load = f => {
+        if (!f) return;
+        if (!/\.(md|markdown|txt)$/i.test(f.name)) { alert('Нужен файл .md'); return; }
+        const r = new FileReader();
+        r.onload = () => {
+          if (!isNew && md.value.trim() && !confirm('Заменить текст страницы содержимым «' + f.name + '»?')) return;
+          md.value = r.result;
+          if (isNew && !slug.value) slug.value = toSlug(f.name);
+          drop.classList.add('ok'); drop.querySelector('b').textContent = '✓ ' + f.name + ' — проверьте и нажмите «Сохранить»';
+          (slug.value ? md : slug).focus();
+        };
+        r.readAsText(f, 'utf-8');
+      };
+      ['dragenter', 'dragover'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+      ['dragleave', 'drop'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); if (ev === 'drop' || !e.relatedTarget) drop.classList.remove('over'); }));
+      document.addEventListener('drop', e => load(e.dataTransfer.files[0]));
+      document.getElementById('mdfile').addEventListener('change', e => load(e.target.files[0]));
+    })();
+    </script>
+    <?php
+}

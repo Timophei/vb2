@@ -129,3 +129,13 @@ table.clients td.chk input, table.clients th.chk input{width:16px;height:16px;ma
 .expbar{display:flex;gap:12px;align-items:center;margin-top:12px;flex-wrap:wrap}
 .expbar button:disabled{opacity:.45;cursor:default}
 h2 a.dl{float:right;font-size:13px;font-weight:500}
+.drop{border:2px dashed #b8c3d6;border-radius:12px;padding:22px 16px;text-align:center;margin:4px 0 14px;transition:background .15s,border-color .15s}
+.drop b{display:block;font-size:16px;margin-bottom:4px}
+.drop small{display:block;color:#6b7385;margin-top:6px}
+.drop.over{background:#eaf0f9;border-color:#1f4e8c}
+.drop.ok{border-style:solid;border-color:#2e8b57;background:#eef8f1}
+.drop .pick{display:inline;color:#1f4e8c;text-decoration:underline;cursor:pointer;margin:0}
+.slug{display:flex;align-items:center;gap:0}
+.slug span{color:#6b7385;font-size:14px;white-space:nowrap;padding-right:2px}
+.slug input{margin:0}
+#md{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.5}

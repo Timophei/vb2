@@ -15,7 +15,7 @@ chmod 770 data
 [ -f config.php ] && chown root:www-data config.php && chmod 640 config.php
 
 echo "→ Проверка синтаксиса PHP…"
-find lib engine public bin -name '*.php' -print0 | xargs -0 -n1 php -l > /dev/null
+find lib engine public bin -path lib/vendor -prune -o -name '*.php' -print0 | xargs -0 -n1 php -l > /dev/null
 
 echo "→ Перезапуск PHP-FPM…"
 systemctl reload php8.3-fpm
