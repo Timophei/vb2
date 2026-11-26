@@ -707,11 +707,13 @@ function view_b24x(array $view): void
     <div class="card" id="b24x">
       <h2>Выгрузка для анализа (Битрикс24)</h2>
       <p class="hint">Данные портала <?= h(b24_portal_x() ?: '—') ?>, а не бота: все диалоги открытых линий всех сотрудников за период, лиды, сделки, контакты, звонки.
-        Только чтение. Файл собирается и сразу скачивается, на сервере не остаётся. За месяц — обычно 1–5 минут, не закрывайте вкладку.</p>
-      <form method="post" class="b24x-form"><?= csrf_field('b24x_export', ['back' => 'tab=settings#b24x']) ?>
+        Только чтение. Период — до 6 месяцев. Сбор идёт в фоне, с паузами между запросами, чтобы не нагружать портал: месяц с ~1500 диалогами — порядка 10–20 минут.
+        Вкладку можно закрыть. Готовый файл хранится до скачивания (не дольше 3 часов) и после скачивания удаляется.</p>
+      <?php $job = b24x_job_latest(); if ($job): view_b24x_job($job); endif; ?>
+      <form method="post" class="b24x-form"><?= csrf_field('b24x_start', ['back' => 'tab=settings#b24x']) ?>
         <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">
           <label>С <input type="date" name="from" required value="<?= h($first->format('Y-m-d')) ?>"></label>
-          <label>По <input type="date" name="to" required value="<?= h($last->format('Y-m-d')) ?>"></label>
+          <label>По <input type="date" name="to" required value="<?= h($last->format('Y-m-d')) ?>" max="<?= h((new DateTimeImmutable('now', $tz))->format('Y-m-d')) ?>"></label>
           <label>Воронка сделок
             <select name="category">
               <option value="">все воронки</option>
@@ -723,11 +725,11 @@ function view_b24x(array $view): void
         <label class="row" style="margin-top:8px"><input type="checkbox" name="nomask" value="1"> Без маскировки персональных данных (телефоны, почта, фамилии, номера карт видны полностью)</label>
         <p class="hint">По умолчанию в телефонах скрыты 3 цифры (7914***4567), в почте — середина имени (iv***v@mail.ru), фамилии клиентов — до первой буквы, у номеров карт видны 4 последние цифры. Время — <?= h(tz_label()) ?>.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button name="kind" value="dialogs">Диалоги (zip)</button>
-          <button name="kind" value="crm">CRM (xlsx)</button>
-          <button name="kind" value="all">Всё одним архивом</button>
+          <?php $busy = b24x_job_running() !== null; ?>
+          <button name="kind" value="dialogs"<?= $busy ? ' disabled' : '' ?>>Диалоги (zip)</button>
+          <button name="kind" value="crm"<?= $busy ? ' disabled' : '' ?>>CRM (xlsx)</button>
+          <button name="kind" value="all"<?= $busy ? ' disabled' : '' ?>>Всё одним архивом</button>
         </div>
-        <p class="hint b24x-wait" hidden style="margin-top:8px">Собираю данные с портала… Файл скачается сам, когда будет готов.</p>
       </form>
       <form method="post" style="margin-top:10px"><?= csrf_field('b24x_check', ['back' => 'tab=settings#b24x']) ?><button>Проверить доступ к порталу</button></form>
       <?php if (!empty($view['b24x_check'])): ?>
@@ -746,12 +748,62 @@ function view_b24x(array $view): void
     </div>
     <script>
     document.querySelectorAll('.b24x-form').forEach(f => f.addEventListener('submit', () => {
-      const w = f.querySelector('.b24x-wait'); w.hidden = false;
-      setTimeout(() => f.querySelectorAll('button').forEach(b => b.disabled = true), 0); // после сбора полей формы, иначе потеряется kind
-      setTimeout(() => f.querySelectorAll('button').forEach(b => b.disabled = false), 3000); // скачивание не уводит со страницы
+      // после сбора полей формы, иначе потеряется kind
+      setTimeout(() => f.querySelectorAll('button').forEach(b => b.disabled = true), 0);
     }));
     </script>
     <?php
+}
+
+const B24X_STATES = ['queued' => 'в очереди', 'running' => 'идёт', 'done' => 'готово', 'error' => 'ошибка', 'cancelled' => 'отменено'];
+
+/** Блок последнего задания: ход, журнал шагов, скачивание / отмена. Пока идёт — обновляется сам. */
+function view_b24x_job(array $j): void
+{
+    $p = $j['params'];
+    $active = in_array($j['state'], ['queued', 'running'], true);
+    $kinds = ['dialogs' => 'диалоги', 'crm' => 'CRM', 'all' => 'всё'];
+    $dur = (int)(($j['finished'] ?? time()) - ($j['started'] ?? $j['created']));
+    ?>
+    <div class="b24x-job" data-id="<?= h($j['id']) ?>" data-active="<?= $active ? 1 : 0 ?>" style="border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:0 0 14px">
+      <b><?= h($p['from']) ?> — <?= h($p['to']) ?></b> · <?= h($kinds[$p['kind']] ?? $p['kind']) ?><?= $p['mask'] ? '' : ' · <b class="bad">без маскировки</b>' ?> ·
+      <span class="b24x-state <?= $j['state'] === 'done' ? 'good' : ($j['state'] === 'error' ? 'bad' : '') ?>"><?= h(B24X_STATES[$j['state']] ?? $j['state']) ?></span>
+      · <span class="b24x-meta muted"><?= sprintf('%d:%02d', intdiv($dur, 60), $dur % 60) ?>, запросов: <?= (int)$j['requests'] ?></span>
+      <pre class="b24x-log" style="white-space:pre-wrap;font-size:12px;margin:8px 0;max-height:220px;overflow:auto"><?= h(implode("\n", $j['log'] ?? [])) ?></pre>
+      <p class="b24x-err err"<?= $j['error'] ? '' : ' hidden' ?>><?= h((string)$j['error']) ?></p>
+      <div class="b24x-done"<?= $j['state'] === 'done' ? '' : ' hidden' ?>>
+        <?php if ($j['state'] === 'done' && $j['file']): ?>
+          <p class="hint">Диалогов: <?= (int)$j['counts']['dialogs'] ?> · лидов: <?= (int)$j['counts']['leads'] ?> · сделок: <?= (int)$j['counts']['deals'] ?> · контактов: <?= (int)$j['counts']['contacts'] ?> · звонков: <?= (int)$j['counts']['calls'] ?>
+            <?php foreach ($j['warnings'] ?? [] as $w): ?><br><span class="bad"><?= h($w) ?></span><?php endforeach; ?></p>
+          <a href="?b24x_download=<?= h($j['id']) ?>"><b>Скачать <?= h($j['file']['name']) ?></b> (<?= round($j['file']['size'] / 1048576, 1) ?> МБ)</a>
+          <span class="hint">— после скачивания файл удалится с сервера</span>
+        <?php endif; ?>
+      </div>
+      <?php if ($active): ?>
+        <form method="post" style="margin-top:6px"><?= csrf_field('b24x_cancel', ['job' => $j['id'], 'back' => 'tab=settings#b24x']) ?><button>Отменить</button></form>
+      <?php endif; ?>
+    </div>
+    <?php if ($active): ?>
+    <script>
+    (() => {
+      const box = document.querySelector('.b24x-job[data-active="1"]');
+      if (!box) return;
+      const tick = async () => {
+        try {
+          const j = await (await fetch('?b24x_status=' + box.dataset.id, {cache: 'no-store'})).json();
+          if (['done', 'error', 'cancelled', 'gone'].includes(j.state)) { location.reload(); return; }
+          box.querySelector('.b24x-state').textContent = {queued: 'в очереди', running: 'идёт'}[j.state] || j.state;
+          const sec = Math.floor(Date.now() / 1000) - (j.started || j.created);
+          box.querySelector('.b24x-meta').textContent = Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0') + ', запросов: ' + j.requests
+            + (j.ago > 60 ? ' · портал не отвечает ' + j.ago + ' с' + (j.last_method ? ' (' + j.last_method + ')' : '') : '');
+          const log = box.querySelector('.b24x-log'); log.textContent = (j.log || []).join('\n'); log.scrollTop = log.scrollHeight;
+        } catch (e) {}
+        setTimeout(tick, 2000);
+      };
+      setTimeout(tick, 1500);
+    })();
+    </script>
+    <?php endif;
 }
 
 

@@ -20,6 +20,23 @@ declare(strict_types=1);
  */
 
 const B24X_TYPE = [1 => 'lead', 2 => 'deal', 3 => 'contact', 4 => 'company'];
+const B24X_MAX_DAYS = 186;          // период — не больше ~6 месяцев
+const B24X_PAUSE_MS = 250;          // пауза между запросами: портал рабочий, менеджеры в нём работают
+const B24X_HISTORY_BATCH = 10;      // историй переписки в одном пакете (они тяжёлые)
+
+/**
+ * Хук перед каждым запросом (задание выгрузки ставит сюда проверку отмены и счётчик).
+ * @var callable|null
+ */
+$GLOBALS['B24X_HOOK'] = null;
+
+final class B24xCancelled extends RuntimeException {}
+
+/** Отмену не глотаем в местах, где ошибка отдельного запроса не критична. */
+function b24x_rethrow(Throwable $e): void
+{
+    if ($e instanceof B24xCancelled) throw $e;
+}
 
 /* ------------------------------------------------------------------ */
 /*  Запросы                                                            */
@@ -33,13 +50,16 @@ function b24x_webhook(): string
 /** Один запрос с повтором при лимите портала (QUERY_LIMIT_EXCEEDED, 503). */
 function b24x(string $method, array $params = []): array
 {
+    if (is_callable($GLOBALS['B24X_HOOK'] ?? null)) ($GLOBALS['B24X_HOOK'])($method);
     if (function_exists('b24_mock')) return b24_mock($method, $params);
     $base = b24x_webhook();
     if ($base === '') throw new RuntimeException('Не задан вебхук Битрикс24 (b24_export_webhook или bitrix_webhook в config.php)');
     for ($try = 0; ; $try++) {
+        usleep(B24X_PAUSE_MS * 1000);
+        $t0 = microtime(true);
         $ch = curl_init($base . '/' . $method . '.json');
         curl_setopt_array($ch, [
-            CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 120,
+            CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 300, CURLOPT_CONNECTTIMEOUT => 20,
             CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
             CURLOPT_POSTFIELDS => json_encode($params, JSON_UNESCAPED_UNICODE),
         ]);
@@ -49,8 +69,9 @@ function b24x(string $method, array $params = []): array
         curl_close($ch);
         $data = $raw === false ? null : json_decode((string)$raw, true);
         $limit = $code === 503 || (is_array($data) && in_array($data['error'] ?? '', ['QUERY_LIMIT_EXCEEDED', 'OPERATION_TIME_LIMIT'], true));
-        if (($limit || $raw === false) && $try < 6) { sleep(1 + $try); continue; }
-        if ($raw === false) throw new RuntimeException("Битрикс24 $method: нет соединения: $err");
+        if ($limit && $try < 6) { sleep(2 + 2 * $try); continue; }           // лимит портала — ждём и повторяем
+        if ($raw === false && $try < 1 && microtime(true) - $t0 < 60) { sleep(3); continue; } // обрыв связи — один повтор; таймаут не повторяем
+        if ($raw === false) throw new RuntimeException("Битрикс24 $method: " . (microtime(true) - $t0 >= 60 ? 'портал не ответил за ' . round(microtime(true) - $t0) . ' с' : 'нет соединения') . ": $err");
         if (!is_array($data) || isset($data['error'])) {
             $msg = is_array($data) ? ($data['error'] . ': ' . ($data['error_description'] ?? '')) : mb_substr((string)$raw, 0, 300);
             throw new RuntimeException("$method (HTTP $code): $msg");
@@ -62,10 +83,10 @@ function b24x(string $method, array $params = []): array
 /**
  * Пакет до 50 команд. $cmds: ключ => [method, params]. Возвращает ключ => result (или ['_error' => текст]).
  */
-function b24x_batch(array $cmds): array
+function b24x_batch(array $cmds, int $size = 50): array
 {
     $out = [];
-    foreach (array_chunk($cmds, 50, true) as $chunk) {
+    foreach (array_chunk($cmds, $size, true) as $chunk) {
         $cmd = [];
         foreach ($chunk as $k => [$m, $p]) $cmd[$k] = $m . '?' . http_build_query($p);
         $r = b24x('batch', ['halt' => 0, 'cmd' => $cmd])['result'] ?? [];
@@ -85,15 +106,17 @@ function b24x_list(string $method, array $filter, array $select, ?callable $prog
 {
     $all = [];
     $last = 0;
-    while (true) {
+    for ($page = 0; $page < 4000; $page++) {
         $f = $filter + ['>ID' => $last];
         $res = b24x($method, ['filter' => $f, 'select' => $select, 'order' => ['ID' => 'ASC'], 'start' => -1])['result'] ?? [];
         if (!is_array($res) || !$res) break;
-        foreach ($res as $row) { $all[] = $row; $last = max($last, (int)$row['ID']); }
+        $prev = $last;
+        foreach ($res as $row) { $all[(int)$row['ID']] = $row; $last = max($last, (int)$row['ID']); }
+        if ($last <= $prev) throw new RuntimeException("$method: портал не понимает фильтр по ID — список не листается");
         if ($progress) $progress(count($all));
         if (count($res) < 50) break;
     }
-    return $all;
+    return array_values($all);
 }
 
 /** Список с постраничной выдачей по start/next — для методов без фильтра по ID. */
@@ -133,7 +156,8 @@ function b24x_period(string $from, string $to): array
     $b = DateTimeImmutable::createFromFormat('!Y-m-d', $to, $tz);
     if (!$a || !$b) throw new RuntimeException('Укажите даты «с» и «по».');
     if ($b < $a) [$a, $b] = [$b, $a];
-    if ($a->diff($b)->days > 366) throw new RuntimeException('Период не больше года.');
+    if ($a->diff($b)->days + 1 > B24X_MAX_DAYS) throw new RuntimeException('Период не больше 6 месяцев.');
+    if ($a > new DateTimeImmutable('now', $tz)) throw new RuntimeException('Период ещё не начался.');
     return [$a->format('c'), $b->setTime(23, 59, 59)->format('c'), $a->format('Ymd') . '-' . $b->format('Ymd')];
 }
 
@@ -142,7 +166,7 @@ function b24x_dt($v): string
 {
     $v = trim((string)$v);
     if ($v === '') return '';
-    try { return (new DateTimeImmutable($v))->setTimezone(app_tz())->format('Y-m-d H:i:s'); } catch (Throwable $e) { return $v; }
+    try { return (new DateTimeImmutable($v))->setTimezone(app_tz())->format('Y-m-d H:i:s'); } catch (Throwable $e) { b24x_rethrow($e); return $v; }
 }
 
 /* ------------------------------------------------------------------ */
@@ -211,17 +235,17 @@ final class B24xRef
                 $this->status[$s['ENTITY_ID']][(string)$s['STATUS_ID']] = (string)$s['NAME'];
                 $this->semantic[$s['ENTITY_ID']][(string)$s['STATUS_ID']] = (string)($s['EXTRA']['SEMANTICS'] ?? $s['SEMANTICS'] ?? '');
             }
-        } catch (Throwable $e) { $this->warnings[] = 'Справочник статусов: ' . $e->getMessage(); }
+        } catch (Throwable $e) { b24x_rethrow($e); $this->warnings[] = 'Справочник статусов: ' . $e->getMessage(); }
         $this->categories = [0 => 'Общая'];
         try {
             foreach (b24x('crm.category.list', ['entityTypeId' => 2])['result']['categories'] ?? [] as $c) $this->categories[(int)$c['id']] = (string)$c['name'];
-        } catch (Throwable $e) {
+        } catch (Throwable $e) { b24x_rethrow($e);
             try { foreach ((array)(b24x('crm.dealcategory.list', [])['result'] ?? []) as $c) $this->categories[(int)$c['ID']] = (string)$c['NAME']; }
-            catch (Throwable $e2) { $this->warnings[] = 'Воронки: ' . $e2->getMessage(); }
+            catch (Throwable $e2) { b24x_rethrow($e2); $this->warnings[] = 'Воронки: ' . $e2->getMessage(); }
         }
         try {
             foreach ((array)(b24x('imopenlines.config.list.get', ['PARAMS' => ['select' => ['ID', 'LINE_NAME']]])['result'] ?? []) as $l) $this->lines[(int)$l['ID']] = (string)$l['LINE_NAME'];
-        } catch (Throwable $e) { $this->warnings[] = 'Названия открытых линий: ' . $e->getMessage(); }
+        } catch (Throwable $e) { b24x_rethrow($e); $this->warnings[] = 'Названия открытых линий: ' . $e->getMessage(); }
         foreach (['lead', 'deal', 'contact'] as $ent) {
             try {
                 foreach ((array)(b24x("crm.$ent.fields", [])['result'] ?? []) as $code => $f) {
@@ -230,7 +254,7 @@ final class B24xRef
                     $label = (string)($f['listLabel'] ?? '') ?: (string)($f['formLabel'] ?? '') ?: (string)($f['title'] ?? $code);
                     $this->fields[$ent][$code] = ['label' => $label, 'items' => $items, 'type' => (string)($f['type'] ?? '')];
                 }
-            } catch (Throwable $e) { $this->warnings[] = "Поля $ent: " . $e->getMessage(); }
+            } catch (Throwable $e) { b24x_rethrow($e); $this->warnings[] = "Поля $ent: " . $e->getMessage(); }
         }
     }
 
@@ -265,7 +289,7 @@ final class B24xRef
                 $u = $r[0] ?? null;
                 $this->users[$id] = $u ? trim(($u['NAME'] ?? '') . ' ' . ($u['LAST_NAME'] ?? '')) ?: ('#' . $id) : ('#' . $id);
             }
-        } catch (Throwable $e) {
+        } catch (Throwable $e) { b24x_rethrow($e);
             foreach ($ids as $id) $this->users[$id] = '#' . $id;
             $this->warnings[] = 'Имена сотрудников (нужно право user): ' . $e->getMessage();
         }
@@ -349,9 +373,10 @@ function b24x_collect(string $from, string $to, array $opt = [], ?callable $prog
     $ref->load();
     $crmSel = ['*', 'UF_*', 'PHONE', 'EMAIL', 'IM'];
 
-    $say('лиды');
-    $leadsNew = b24x_list('crm.lead.list', ['>=DATE_CREATE' => $a, '<=DATE_CREATE' => $b], $crmSel);
-    $leadsClosed = b24x_list('crm.lead.list', ['>=DATE_CLOSED' => $a, '<=DATE_CLOSED' => $b, '@STATUS_SEMANTIC_ID' => ['S', 'F']], $crmSel);
+    $say('лиды созданные');
+    $leadsNew = b24x_list('crm.lead.list', ['>=DATE_CREATE' => $a, '<=DATE_CREATE' => $b], $crmSel, fn($n) => $say("лиды созданные: $n"));
+    $say('лиды закрытые');
+    $leadsClosed = b24x_list('crm.lead.list', ['>=DATE_CLOSED' => $a, '<=DATE_CLOSED' => $b, '@STATUS_SEMANTIC_ID' => ['S', 'F']], $crmSel, fn($n) => $say("лиды закрытые: $n"));
     $say('сделки');
     $dealFilter = [];
     if (isset($opt['category']) && $opt['category'] !== '' && $opt['category'] !== null) $dealFilter['CATEGORY_ID'] = (int)$opt['category'];
@@ -364,17 +389,21 @@ function b24x_collect(string $from, string $to, array $opt = [], ?callable $prog
     $actSel = ['ID', 'OWNER_TYPE_ID', 'OWNER_ID', 'TYPE_ID', 'PROVIDER_ID', 'PROVIDER_TYPE_ID', 'ASSOCIATED_ENTITY_ID', 'SUBJECT', 'CREATED', 'START_TIME', 'END_TIME', 'DEADLINE', 'COMPLETED', 'DIRECTION', 'RESPONSIBLE_ID', 'ORIGIN_ID', 'COMMUNICATIONS'];
     $calls = [];
     try { $calls = b24x_list('crm.activity.list', ['PROVIDER_ID' => 'VOXIMPLANT_CALL', '>=CREATED' => $a, '<=CREATED' => $b], $actSel); }
-    catch (Throwable $e) { $ref->warnings[] = 'Звонки: ' . $e->getMessage(); }
+    catch (Throwable $e) { b24x_rethrow($e); $ref->warnings[] = 'Звонки: ' . $e->getMessage(); }
 
     $say('сессии открытых линий');
-    $sessions = b24x_list('crm.activity.list', ['PROVIDER_ID' => 'IMOPENLINES_SESSION', '>=CREATED' => $a, '<=CREATED' => $b], $actSel);
+    $sessions = b24x_list('crm.activity.list', ['PROVIDER_ID' => 'IMOPENLINES_SESSION', '>=CREATED' => $a, '<=CREATED' => $b], $actSel, fn($n) => $say("сессии открытых линий: $n"));
 
     // привязки дел (у одной сессии бывают и лид, и сделка, и контакт)
     $say('привязки (' . count($sessions) . ' диалогов, ' . count($calls) . ' звонков)');
     $bind = [];
     $cmds = [];
     foreach (array_merge($sessions, $calls) as $s) $cmds['a' . $s['ID']] = ['crm.activity.binding.list', ['activityId' => (int)$s['ID']]];
-    foreach ($cmds ? b24x_batch($cmds) : [] as $k => $r) {
+    $nb = 0;
+    foreach (array_chunk($cmds, 50, true) as $chunk) {
+      $nb += count($chunk);
+      $say('привязки: ' . $nb . ' из ' . count($cmds));
+      foreach (b24x_batch($chunk) as $k => $r) {
         $id = (int)substr($k, 1);
         $bind[$id] = [];
         if (isset($r['_error'])) continue;
@@ -382,6 +411,7 @@ function b24x_collect(string $from, string $to, array $opt = [], ?callable $prog
             $t = B24X_TYPE[(int)($x['entityTypeId'] ?? 0)] ?? null;
             if ($t) $bind[$id][$t][] = (int)$x['entityId'];
         }
+      }
     }
     $binding = function (array $act) use (&$bind): array {
         $b = $bind[(int)$act['ID']] ?? [];
@@ -396,19 +426,27 @@ function b24x_collect(string $from, string $to, array $opt = [], ?callable $prog
         $cmds = [];
         foreach ($sessions as $s) if ((int)$s['ASSOCIATED_ENTITY_ID']) $cmds['s' . $s['ID']] = ['imopenlines.session.history.get', ['SESSION_ID' => (int)$s['ASSOCIATED_ENTITY_ID']]];
         $done = 0;
-        foreach (array_chunk($cmds, 50, true) as $chunk) {
-            foreach (b24x_batch($chunk) as $k => $r) $hist[(int)substr($k, 1)] = $r;
+        foreach (array_chunk($cmds, B24X_HISTORY_BATCH, true) as $chunk) {
+            try {
+                foreach (b24x_batch($chunk) as $k => $r) $hist[(int)substr($k, 1)] = $r;
+            } catch (Throwable $e) { b24x_rethrow($e);
+                // пакет целиком не прошёл (тяжёлый) — по одной; не получилось — сессия будет с пометкой об ошибке
+                foreach ($chunk as $k => [$m, $p]) {
+                    try { $hist[(int)substr($k, 1)] = b24x($m, $p)['result'] ?? []; }
+                    catch (Throwable $e2) { b24x_rethrow($e2); $hist[(int)substr($k, 1)] = ['_error' => $e2->getMessage()]; }
+                }
+            }
             $done += count($chunk);
             // на части версий история требует ещё и CHAT_ID: узнаём чат через imopenlines.dialog.get и повторяем
             $retry = [];
             foreach ($chunk as $k => [$m, $p]) if (isset($hist[(int)substr($k, 1)]['_error'])) $retry[$k] = ['imopenlines.dialog.get', $p];
             if ($retry) {
                 $again = [];
-                foreach (b24x_batch($retry) as $k => $r) {
+                foreach (b24x_batch($retry, B24X_HISTORY_BATCH) as $k => $r) {
                     $chat = (int)($r['id'] ?? $r['chat_id'] ?? 0);
                     if ($chat) $again[$k] = ['imopenlines.session.history.get', $retry[$k][1] + ['CHAT_ID' => $chat]];
                 }
-                foreach ($again ? b24x_batch($again) : [] as $k => $r) if (!isset($r['_error'])) $hist[(int)substr($k, 1)] = $r;
+                foreach ($again ? b24x_batch($again, B24X_HISTORY_BATCH) : [] as $k => $r) if (!isset($r['_error'])) $hist[(int)substr($k, 1)] = $r;
             }
             $say("переписка: $done из " . count($cmds));
         }
@@ -437,6 +475,7 @@ function b24x_collect(string $from, string $to, array $opt = [], ?callable $prog
     foreach ($contactsNew as $c) $contacts[(int)$c['ID']] = $c;
     $contacts += b24x_by_ids('crm.contact.list', array_diff($contactIds, array_keys($contacts)), $crmSel);
     // сделки, выросшие из лидов периода (в том числе созданные позже периода)
+    $say('сделки из лидов периода');
     $fromLeads = [];
     $newLeadIds = array_map(fn($l) => (int)$l['ID'], $leadsNew);
     foreach (array_chunk($newLeadIds, 50) as $chunk) {
@@ -449,6 +488,7 @@ function b24x_collect(string $from, string $to, array $opt = [], ?callable $prog
     $users = [];
     foreach ([$leads, $deals, $contacts] as $set) foreach ($set as $r) $users[] = (int)($r['ASSIGNED_BY_ID'] ?? 0);
     foreach (array_merge($sessions, $calls) as $s) $users[] = (int)$s['RESPONSIBLE_ID'];
+    $say('имена сотрудников');
     $ref->needUsers($users);
 
     return compact('ref', 'mask', 'tag', 'from', 'to', 'leadsNew', 'leadsClosed', 'dealsNew', 'dealsClosed', 'contactsNew', 'calls', 'sessions', 'hist', 'leads', 'deals', 'contacts', 'fromLeads') + ['binding' => $binding];
@@ -775,7 +815,7 @@ function b24x_check(): array
         foreach (['crm' => 'лиды, сделки, контакты, дела', 'imopenlines' => 'переписка открытых линий', 'user' => 'имена сотрудников'] as $s => $what) {
             $out[] = ['Право ' . $s, in_array($s, $scope, true) ? 'есть — ' . $what : 'НЕТ — ' . $what . ' не выгрузятся', in_array($s, $scope, true)];
         }
-    } catch (Throwable $e) { return [['Вебхук', $e->getMessage(), false]]; }
+    } catch (Throwable $e) { b24x_rethrow($e); return [['Вебхук', $e->getMessage(), false]]; }
     try {
         $a = b24x('crm.activity.list', ['filter' => ['PROVIDER_ID' => 'IMOPENLINES_SESSION'], 'select' => ['ID', 'CREATED', 'ASSOCIATED_ENTITY_ID', 'COMMUNICATIONS'], 'order' => ['ID' => 'DESC'], 'start' => -1])['result'][0] ?? null;
         $out[] = ['Последний диалог ОЛ в CRM', $a ? 'дело #' . $a['ID'] . ', сессия ' . $a['ASSOCIATED_ENTITY_ID'] . ', ' . b24x_dt($a['CREATED']) . ', ' . json_encode(b24x_imol($a), JSON_UNESCAPED_UNICODE) : 'не найдено', (bool)$a];
@@ -786,16 +826,193 @@ function b24x_check(): array
                 $types = [];
                 foreach ($msgs as $m) { $id = (int)($m['author_id'] ?? 0); $t = b24x_author_type($id, (array)($h['users'][$id] ?? [])); $types[$t] = ($types[$t] ?? 0) + 1; }
                 $out[] = ['Переписка этой сессии', count($msgs) . ' сообщ.: ' . json_encode($types, JSON_UNESCAPED_UNICODE) . ' · ключи ответа: ' . implode(', ', array_keys($h)), (bool)$msgs];
-            } catch (Throwable $e) { $out[] = ['Переписка этой сессии', $e->getMessage(), false]; }
+            } catch (Throwable $e) { b24x_rethrow($e); $out[] = ['Переписка этой сессии', $e->getMessage(), false]; }
         }
-    } catch (Throwable $e) { $out[] = ['Дела открытых линий', $e->getMessage(), false]; }
+    } catch (Throwable $e) { b24x_rethrow($e); $out[] = ['Дела открытых линий', $e->getMessage(), false]; }
     try {
         $n = b24x('crm.activity.list', ['filter' => ['PROVIDER_ID' => 'VOXIMPLANT_CALL'], 'select' => ['ID'], 'order' => ['ID' => 'DESC'], 'start' => -1])['result'] ?? [];
         $out[] = ['Звонки в CRM', $n ? 'есть (последнее дело #' . $n[0]['ID'] . ')' : 'не найдено', true];
-    } catch (Throwable $e) { $out[] = ['Звонки', $e->getMessage(), false]; }
+    } catch (Throwable $e) { b24x_rethrow($e); $out[] = ['Звонки', $e->getMessage(), false]; }
     try {
         $l = b24x('imopenlines.config.list.get', ['PARAMS' => ['select' => ['ID', 'LINE_NAME']]])['result'] ?? [];
         $out[] = ['Открытые линии', implode('; ', array_map(fn($x) => $x['ID'] . ': ' . $x['LINE_NAME'], (array)$l)), true];
-    } catch (Throwable $e) { $out[] = ['Открытые линии', $e->getMessage(), false]; }
+    } catch (Throwable $e) { b24x_rethrow($e); $out[] = ['Открытые линии', $e->getMessage(), false]; }
     return $out;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Фоновое задание                                                    */
+/* ------------------------------------------------------------------ */
+/*
+ * Сбор за месяц — сотни запросов, поэтому он идёт отдельным процессом (bin/b24export.php),
+ * а админка раз в пару секунд показывает ход. Готовый файл лежит в data/exports до скачивания:
+ * после скачивания удаляется, нескачанный — через 3 часа. Одновременно — одно задание.
+ */
+
+const B24X_KEEP_SEC = 3 * 3600;
+
+function b24x_jobs_dir(): string
+{
+    $d = data_dir() . '/exports';
+    if (!is_dir($d)) mkdir($d, 0770, true);
+    return $d;
+}
+
+function b24x_job_file(string $id, string $ext = 'json'): string
+{
+    if (!preg_match('/^[a-f0-9]{16}$/', $id)) throw new RuntimeException('Неверное задание.');
+    return b24x_jobs_dir() . '/' . $id . '.' . $ext;
+}
+
+function b24x_job_get(string $id): ?array
+{
+    try { $f = b24x_job_file($id); } catch (Throwable $e) { b24x_rethrow($e); return null; }
+    return is_file($f) ? (jdec((string)@file_get_contents($f)) ?: null) : null;
+}
+
+function b24x_job_put(array $job): void
+{
+    $job['updated'] = time();
+    $f = b24x_job_file($job['id']);
+    file_put_contents($f . '.tmp', jenc($job));
+    rename($f . '.tmp', $f);
+}
+
+/** Удалить старые задания и файлы; снять «зависшие» (процесс умер без отметки). */
+function b24x_jobs_cleanup(): void
+{
+    foreach (glob(b24x_jobs_dir() . '/*') ?: [] as $f) {
+        if (str_ends_with($f, '.json')) {
+            $j = jdec((string)@file_get_contents($f));
+            if (($j['state'] ?? '') === 'running' && time() - (int)($j['updated'] ?? 0) > 600) {
+                $j['state'] = 'error';
+                $j['error'] = 'Процесс выгрузки перестал отвечать (больше 10 минут без хода).';
+                $j['updated'] = time();
+                @file_put_contents($f, jenc($j));
+            }
+        }
+        if (time() - (int)@filemtime($f) > B24X_KEEP_SEC) @unlink($f);
+    }
+}
+
+/** Последнее задание (для показа в админке). */
+function b24x_job_latest(): ?array
+{
+    $best = null;
+    foreach (glob(b24x_jobs_dir() . '/*.json') ?: [] as $f) {
+        $j = jdec((string)@file_get_contents($f));
+        if ($j && (!$best || (int)$j['created'] > (int)$best['created'])) $best = $j;
+    }
+    return $best;
+}
+
+function b24x_job_running(): ?array
+{
+    foreach (glob(b24x_jobs_dir() . '/*.json') ?: [] as $f) {
+        $j = jdec((string)@file_get_contents($f));
+        if (in_array($j['state'] ?? '', ['queued', 'running'], true)) return $j;
+    }
+    return null;
+}
+
+/** Создать задание и запустить процесс. */
+function b24x_job_start(array $params, string $user): array
+{
+    b24x_period((string)$params['from'], (string)$params['to']); // проверка дат сразу, до запуска
+    b24x_jobs_cleanup();
+    if ($r = b24x_job_running()) throw new RuntimeException('Уже идёт выгрузка (' . $r['params']['from'] . ' — ' . $r['params']['to'] . '). Дождитесь или отмените её.');
+    $job = ['id' => bin2hex(random_bytes(8)), 'state' => 'queued', 'params' => $params, 'user' => $user, 'created' => time(),
+        'step' => 'запуск', 'log' => [], 'requests' => 0, 'file' => null, 'error' => null, 'cancel' => false];
+    b24x_job_put($job);
+    if (!function_exists('exec')) throw new RuntimeException('На сервере отключена функция exec — фоновую выгрузку не запустить.');
+    $php = (string)cfg('php_cli', '/usr/bin/php');
+    if (!is_file($php)) $php = 'php';
+    $cmd = escapeshellarg($php) . ' ' . escapeshellarg(BOT_ROOT . '/bin/b24export.php') . ' ' . escapeshellarg($job['id']);
+    exec('nohup ' . $cmd . ' >> ' . escapeshellarg(data_dir() . '/b24export.log') . ' 2>&1 &');
+    return $job;
+}
+
+function b24x_job_cancel(string $id): void
+{
+    $j = b24x_job_get($id);
+    if (!$j) return;
+    $j['cancel'] = true;
+    if ($j['state'] === 'queued') $j['state'] = 'cancelled';
+    b24x_job_put($j);
+}
+
+/** Тело задания (вызывается из bin/b24export.php). */
+function b24x_job_run(string $id): void
+{
+    $job = b24x_job_get($id);
+    if (!$job || $job['state'] !== 'queued') return;
+    $job['state'] = 'running';
+    $job['started'] = time();
+    b24x_job_put($job);
+    $t0 = microtime(true);
+    $lastSave = 0.0;
+    $save = function (bool $force = false) use (&$job, &$lastSave) {
+        if (!$force && microtime(true) - $lastSave < 1.5) return;
+        $lastSave = microtime(true);
+        // отмена могла прийти из админки — читаем флаг из файла
+        $disk = b24x_job_get($job['id']);
+        if (!empty($disk['cancel'])) $job['cancel'] = true;
+        b24x_job_put($job);
+    };
+    $GLOBALS['B24X_HOOK'] = function (string $method) use (&$job, $save) {
+        $job['requests']++;
+        $job['last_method'] = $method;
+        $save();
+        if (!empty($job['cancel'])) throw new B24xCancelled('Отменено.');
+    };
+    $say = function (string $step) use (&$job, $t0, $save) {
+        $sec = (int)round(microtime(true) - $t0);
+        // строки одного шага («переписка: 20 из 900») обновляем на месте, новые — добавляем
+        $key = trim((string)preg_replace('/[:(].*$/u', '', $step));
+        $last = end($job['log']) ?: null;
+        $line = sprintf('%d:%02d %s', intdiv($sec, 60), $sec % 60, $step);
+        if ($last && trim((string)preg_replace('/^\S+ |[:(].*$/u', '', $last)) === $key) $job['log'][count($job['log']) - 1] = $line;
+        else $job['log'][] = $line;
+        $job['step'] = $step;
+        $save();
+    };
+    try {
+        $p = $job['params'];
+        $data = b24x_collect((string)$p['from'], (string)$p['to'], ['mask' => (bool)$p['mask'], 'category' => (string)$p['category']], $say);
+        $say('сборка файла');
+        $kind = (string)$p['kind'];
+        if ($kind === 'dialogs') { $tmp = b24x_dialogs_zip($data); $ext = 'zip'; $name = 'b24_dialogs_' . $data['tag'] . '.zip'; }
+        elseif ($kind === 'crm') { $tmp = b24x_crm_xlsx($data); $ext = 'xlsx'; $name = 'b24_crm_' . $data['tag'] . '.xlsx'; }
+        else {
+            $dz = b24x_dialogs_zip($data);
+            $x = b24x_crm_xlsx($data);
+            $tmp = tempnam(sys_get_temp_dir(), 'b24a');
+            $zip = new ZipArchive();
+            $zip->open($tmp, ZipArchive::OVERWRITE);
+            $src = new ZipArchive();
+            $src->open($dz);
+            for ($i = 0; $i < $src->numFiles; $i++) $zip->addFromString('dialogs/' . $src->getNameIndex($i), (string)$src->getFromIndex($i));
+            $src->close();
+            $zip->addFile($x, 'b24_crm_' . $data['tag'] . '.xlsx');
+            $zip->close();
+            @unlink($dz); @unlink($x);
+            $ext = 'zip';
+            $name = 'b24_export_' . $data['tag'] . '.zip';
+        }
+        $dest = b24x_job_file($id, $ext);
+        if (!@rename($tmp, $dest)) { copy($tmp, $dest); @unlink($tmp); }
+        @chmod($dest, 0660);
+        $job['file'] = ['ext' => $ext, 'name' => $name, 'size' => filesize($dest)];
+        $job['counts'] = ['dialogs' => count($data['sessions']), 'leads' => count($data['leadsNew']), 'deals' => count($data['dealsNew']), 'contacts' => count($data['contactsNew']), 'calls' => count($data['calls'])];
+        $job['warnings'] = $data['ref']->warnings;
+        $job['state'] = 'done';
+        $say('готово');
+    } catch (Throwable $e) {
+        $job['state'] = !empty($job['cancel']) ? 'cancelled' : 'error';
+        $job['error'] = $e->getMessage();
+        app_log('b24x job ' . $id . ': ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
+    }
+    $job['finished'] = time();
+    $GLOBALS['B24X_HOOK'] = null;
+    $save(true);
 }

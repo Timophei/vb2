@@ -96,6 +96,23 @@ if (isset($_GET['export_txt'])) {
     send_download($tmp, 'dialog_' . $eid . '_' . date('Ymd_Hi') . '.txt', 'text/plain; charset=utf-8');
 }
 
+// выгрузка из Битрикс24: ход задания (JSON для обновления страницы) и скачивание готового файла
+if (isset($_GET['b24x_status']) || isset($_GET['b24x_download'])) {
+    if (!can('users')) { http_response_code(403); exit('Только для администратора'); }
+    b24x_jobs_cleanup();
+    if (isset($_GET['b24x_status'])) {
+        header('Content-Type: application/json; charset=utf-8');
+        $j = b24x_job_get((string)$_GET['b24x_status']);
+        exit(jenc($j ? array_diff_key($j, ['params' => 1]) + ['ago' => time() - (int)$j['updated']] : ['state' => 'gone']));
+    }
+    $j = b24x_job_get((string)$_GET['b24x_download']);
+    if (!$j || $j['state'] !== 'done' || !$j['file']) go('tab=settings#b24x', 'Ошибка: файл уже скачан или удалён — запустите выгрузку заново.');
+    $path = b24x_job_file($j['id'], $j['file']['ext']);
+    if (!is_file($path)) go('tab=settings#b24x', 'Ошибка: файл уже скачан или удалён — запустите выгрузку заново.');
+    @unlink(b24x_job_file($j['id']));
+    send_download($path, $j['file']['name'], $j['file']['ext'] === 'zip' ? 'application/zip' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+}
+
 if ($tab === 'catalog' && isset($_GET['export'])) {
     $sec = (string)$_GET['export'];
     $tmp = tempnam(sys_get_temp_dir(), 'cat');
@@ -303,27 +320,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             case 'settings_save':
                 foreach (['welcome', 'suggestions'] as $k) if (isset($_POST[$k])) set_setting($k, str_replace("\r\n", "\n", trim((string)$_POST[$k])));
                 go('tab=settings', 'Сохранено.');
-            case 'b24x_export':
+            case 'b24x_start':
                 if (!can('users')) throw new RuntimeException('Выгрузка доступна только администратору.');
                 set_setting('b24x_category', (string)($_POST['category'] ?? ''));
-                $kind = (string)($_POST['kind'] ?? 'all');
-                $data = b24x_collect((string)$_POST['from'], (string)$_POST['to'], ['mask' => empty($_POST['nomask']), 'category' => (string)($_POST['category'] ?? '')]);
-                app_log('b24x export ' . $kind . ' ' . $data['tag'] . ' by ' . $me['login'] . ($data['mask'] ? '' : ' (без маскировки)'));
-                if ($kind === 'dialogs') send_download(b24x_dialogs_zip($data), 'b24_dialogs_' . $data['tag'] . '.zip', 'application/zip');
-                if ($kind === 'crm') send_download(b24x_crm_xlsx($data), 'b24_crm_' . $data['tag'] . '.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-                $dz = b24x_dialogs_zip($data);
-                $x = b24x_crm_xlsx($data);
-                $all = tempnam(sys_get_temp_dir(), 'b24a');
-                $zip = new ZipArchive();
-                $zip->open($all, ZipArchive::OVERWRITE);
-                $src = new ZipArchive();
-                $src->open($dz);
-                for ($i = 0; $i < $src->numFiles; $i++) $zip->addFromString('dialogs/' . $src->getNameIndex($i), (string)$src->getFromIndex($i));
-                $src->close();
-                $zip->addFile($x, 'b24_crm_' . $data['tag'] . '.xlsx');
-                $zip->close();
-                @unlink($dz); @unlink($x);
-                send_download($all, 'b24_export_' . $data['tag'] . '.zip', 'application/zip');
+                $job = b24x_job_start(['from' => (string)$_POST['from'], 'to' => (string)$_POST['to'], 'kind' => (string)($_POST['kind'] ?? 'all'),
+                    'mask' => empty($_POST['nomask']), 'category' => (string)($_POST['category'] ?? '')], (string)$me['login']);
+                app_log('b24x start ' . $job['id'] . ' ' . $job['params']['from'] . '..' . $job['params']['to'] . ' ' . $job['params']['kind'] . ' by ' . $me['login'] . ($job['params']['mask'] ? '' : ' (без маскировки)'));
+                go('tab=settings#b24x', 'Выгрузка запущена. Ход показан ниже, файл можно будет скачать по готовности.');
+            case 'b24x_cancel':
+                if (!can('users')) throw new RuntimeException('Только для администратора.');
+                b24x_job_cancel((string)$_POST['job']);
+                go('tab=settings#b24x', 'Выгрузка отменяется.');
             case 'b24x_check':
                 if (!can('users')) throw new RuntimeException('Только для администратора.');
                 $view['b24x_check'] = b24x_check();
