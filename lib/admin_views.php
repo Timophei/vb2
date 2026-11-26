@@ -706,8 +706,10 @@ function view_b24x(array $view): void
     ?>
     <div class="card" id="b24x">
       <h2>Выгрузка для анализа (Битрикс24)</h2>
+      <?php $db = b24db_configured(); $c = b24db_cfg(); ?>
+      <p class="hint">Источник: <?= $db ? '<b>база данных Битрикса</b> (' . h($c['ssh_user'] . '@' . $c['ssh_host']) . ' → ' . h($c['db_name']) . ', только чтение, SSH-туннель открывается на время выгрузки)' : 'REST API через вебхук (база не настроена — config.php → b24_db)' ?>.</p>
       <p class="hint">Данные портала <?= h(b24_portal_x() ?: '—') ?>, а не бота: все диалоги открытых линий всех сотрудников за период, лиды, сделки, контакты, звонки.
-        Только чтение. Период — до 6 месяцев. Сбор идёт в фоне, с паузами между запросами, чтобы не нагружать портал: месяц с ~1500 диалогами — порядка 10–20 минут.
+        Только чтение. Период — до 6 месяцев. Сбор идёт в фоне<?= $db ? ' (из базы — обычно меньше минуты)' : ', с паузами между запросами, чтобы не нагружать портал: месяц с ~1500 диалогами — порядка 10–20 минут' ?>.
         Вкладку можно закрыть. Готовый файл хранится до скачивания (не дольше 3 часов) и после скачивания удаляется.</p>
       <?php $job = b24x_job_latest(); if ($job): view_b24x_job($job); endif; ?>
       <form method="post" class="b24x-form"><?= csrf_field('b24x_start', ['back' => 'tab=settings#b24x']) ?>
@@ -721,6 +723,10 @@ function view_b24x(array $view): void
             </select>
           </label>
         </div>
+        <?php if ($db): ?>
+          <label style="margin-top:8px">Пароль MySQL (<?= h($c['db_user']) ?>) <input type="password" name="dbpass" autocomplete="off" required style="max-width:260px"></label>
+          <p class="hint">Не сохраняется: передаётся только процессу выгрузки и стирается.</p>
+        <?php endif; ?>
         <?php if (!$pipes): ?><p class="hint">Воронки ещё не загружены — вкладка «Битрикс24» → «Загрузить с портала». Пока выгрузятся сделки всех воронок.</p><?php endif; ?>
         <label class="row" style="margin-top:8px"><input type="checkbox" name="nomask" value="1"> Без маскировки персональных данных (телефоны, почта, фамилии, номера карт видны полностью)</label>
         <label class="row"><input type="checkbox" name="system" value="1"> Со служебными сообщениями Битрикса (переводы между операторами, «диалог принят / закрыт» — по умолчанию исключены, они раздувают файл)</label>
@@ -732,12 +738,24 @@ function view_b24x(array $view): void
           <button name="kind" value="all"<?= $busy ? ' disabled' : '' ?>>Всё одним архивом</button>
         </div>
       </form>
-      <form method="post" style="margin-top:10px"><?= csrf_field('b24x_check', ['back' => 'tab=settings#b24x']) ?><button>Проверить доступ к порталу</button></form>
+      <form method="post" style="margin-top:10px;display:flex;gap:8px;align-items:end;flex-wrap:wrap"><?= csrf_field('b24x_check', ['back' => 'tab=settings#b24x']) ?>
+        <?php if ($db): ?><label>Пароль MySQL <input type="password" name="dbpass" autocomplete="off" required style="max-width:220px"></label><?php endif; ?>
+        <button><?= $db ? 'Проверить подключение к базе' : 'Проверить доступ к порталу' ?></button></form>
       <?php if (!empty($view['b24x_check'])): ?>
         <ul class="list" style="margin-top:8px">
           <?php foreach ($view['b24x_check'] as [$k, $v, $ok]): ?><li><b class="<?= $ok ? 'good' : 'bad' ?>"><?= h($k) ?>:</b> <?= h($v) ?></li><?php endforeach; ?>
         </ul>
       <?php endif; ?>
+      <details style="margin-top:10px"<?= $db && !is_file(b24db_key_path()) ? ' open' : '' ?>><summary class="hint" style="display:inline;cursor:pointer">Подключение к базе (SSH-ключ)</summary>
+        <?php $line = b24db_key_line(); ?>
+        <?php if ($line === ''): ?>
+          <p class="hint">Ключа ещё нет. Он создаётся один раз и хранится на сервере бота; на сервере Битрикса ограничивается только пробросом порта MySQL.</p>
+          <form method="post"><?= csrf_field('b24db_key', ['back' => 'tab=settings#b24x']) ?><button>Создать SSH-ключ</button></form>
+        <?php else: ?>
+          <p class="hint">Строка для <code>~<?= h($c['ssh_user'] ?? 'vb2tunnel') ?>/.ssh/authorized_keys</code> на сервере Битрикса — ключ сможет только пробросить <?= h($c['db_host'] . ':' . $c['db_port']) ?>, без консоли и команд:</p>
+          <textarea readonly rows="3" style="width:100%;font-family:monospace;font-size:12px" onclick="this.select()"><?= h($line) ?></textarea>
+        <?php endif; ?>
+      </details>
       <details style="margin-top:10px"><summary class="hint" style="display:inline;cursor:pointer">Что внутри</summary>
         <ul class="list">
           <li><b>Диалоги:</b> dialogs.jsonl (по строке на сессию: линия, канал, ответственный, лид/сделка/контакт, реплики с временем и автором — клиент, менеджер, бот, система), dialogs.txt для чтения, messages.csv.</li>

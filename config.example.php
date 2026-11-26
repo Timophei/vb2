@@ -40,6 +40,11 @@ return [
     // Выгрузка для анализа (Настройки → Выгрузка): только чтение, bitrix_mode не влияет.
     // Отдельный вебхук с правами crm, imopenlines, user; пусто — берётся bitrix_webhook.
     'b24_export_webhook' => '',
+    // Выгрузка напрямую из базы Битрикса (лучше REST: портал не нагружается). Пароль MySQL здесь НЕ хранится —
+    // вводится в админке при каждой выгрузке. Пусто — выгрузка через REST. Настройка — README, «Выгрузка из базы».
+    // 'b24_db' => ['ssh_host' => 'crm.milli-mind.ru', 'ssh_port' => 22, 'ssh_user' => 'vb2tunnel',
+    //              'db_name' => 'sitemanager', 'db_user' => 'vb2_read', 'db_host' => '127.0.0.1', 'db_port' => 3306,
+    //              'timezone' => ''],  // пояс дат в базе; пусто — определить по MySQL
 
     // --- Сайт и виджет ---
     'public_url'       => 'https://vb2.b-integration.ru',

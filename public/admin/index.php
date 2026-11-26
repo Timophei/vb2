@@ -323,17 +323,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             case 'b24x_start':
                 if (!can('users')) throw new RuntimeException('Выгрузка доступна только администратору.');
                 set_setting('b24x_category', (string)($_POST['category'] ?? ''));
-                $job = b24x_job_start(['from' => (string)$_POST['from'], 'to' => (string)$_POST['to'], 'kind' => (string)($_POST['kind'] ?? 'all'),
-                    'mask' => empty($_POST['nomask']), 'system' => !empty($_POST['system']), 'category' => (string)($_POST['category'] ?? '')], (string)$me['login']);
+                $src = b24db_configured() ? 'db' : 'rest';
+                if ($src === 'db' && (string)($_POST['dbpass'] ?? '') === '') throw new RuntimeException('Введите пароль MySQL.');
+                $job = b24x_job_start(['from' => (string)$_POST['from'], 'to' => (string)$_POST['to'], 'kind' => (string)($_POST['kind'] ?? 'all'), 'source' => $src,
+                    'mask' => empty($_POST['nomask']), 'system' => !empty($_POST['system']), 'category' => (string)($_POST['category'] ?? '')], (string)$me['login'], (string)($_POST['dbpass'] ?? ''));
+                unset($_POST['dbpass']);
                 app_log('b24x start ' . $job['id'] . ' ' . $job['params']['from'] . '..' . $job['params']['to'] . ' ' . $job['params']['kind'] . ' by ' . $me['login'] . ($job['params']['mask'] ? '' : ' (без маскировки)'));
                 go('tab=settings#b24x', 'Выгрузка запущена. Ход показан ниже, файл можно будет скачать по готовности.');
+            case 'b24db_key':
+                if (!can('users')) throw new RuntimeException('Только для администратора.');
+                b24db_key_line(true);
+                go('tab=settings#b24x', 'SSH-ключ создан. Добавьте строку из блока «Подключение к базе» на сервер Битрикса.');
             case 'b24x_cancel':
                 if (!can('users')) throw new RuntimeException('Только для администратора.');
                 b24x_job_cancel((string)$_POST['job']);
                 go('tab=settings#b24x', 'Выгрузка отменяется.');
             case 'b24x_check':
                 if (!can('users')) throw new RuntimeException('Только для администратора.');
-                $view['b24x_check'] = b24x_check();
+                $view['b24x_check'] = b24db_configured() ? b24db_check((string)($_POST['dbpass'] ?? '')) : b24x_check();
+                unset($_POST['dbpass']);
                 $tab = 'settings';
                 break;
             case 'b24_reference':

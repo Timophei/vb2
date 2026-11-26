@@ -17,6 +17,7 @@ require_once __DIR__ . '/catalog.php';
 require_once __DIR__ . '/catalog_io.php';
 require_once __DIR__ . '/export.php';
 require_once __DIR__ . '/b24export.php';
+require_once __DIR__ . '/b24db.php';
 require_once __DIR__ . '/pages.php';
 require_once __DIR__ . '/telegram.php';
 require_once __DIR__ . '/bitrix.php';

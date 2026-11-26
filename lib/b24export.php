@@ -172,7 +172,11 @@ function b24x_dt($v): string
 {
     $v = trim((string)$v);
     if ($v === '') return '';
-    try { return (new DateTimeImmutable($v))->setTimezone(app_tz())->format('Y-m-d H:i:s'); } catch (Throwable $e) { b24x_rethrow($e); return $v; }
+    try {
+        // дата без пояса (из базы Битрикса) — в поясе сервера Битрикса
+        $src = !preg_match('/(Z|[+\-]\d\d:?\d\d)$/', $v) && ($GLOBALS['B24X_SRC_TZ'] ?? null) instanceof DateTimeZone ? $GLOBALS['B24X_SRC_TZ'] : null;
+        return (new DateTimeImmutable($v, $src))->setTimezone(app_tz())->format('Y-m-d H:i:s');
+    } catch (Throwable $e) { return $v; }
 }
 
 /* ------------------------------------------------------------------ */
@@ -599,6 +603,13 @@ function b24x_dialog_records(array $data): array
             'lead' => null, 'deal' => null, 'contact' => null, 'company_id' => (int)($bb['company'][0] ?? 0),
             'all_links' => $bb, 'messages' => [], 'error' => isset($h['_error']) ? $h['_error'] : null,
         ];
+        if (isset($s['_session'])) { // из базы: поля сессии Битрикса (время первого ответа, рабочее время по настройкам линии и т. п.)
+            $keep = ['STATUS', 'CLOSED', 'SPAM', 'WORKTIME', 'MODE', 'SOURCE', 'MESSAGE_COUNT', 'IS_FIRST', 'VOTE', 'VOTE_HEAD', 'OPERATOR_ID', 'CRM', 'CRM_CREATE',
+                'CRM_CREATE_LEAD', 'CRM_CREATE_CONTACT', 'CRM_CREATE_DEAL', 'DATE_OPERATOR', 'DATE_OPERATOR_ANSWER', 'DATE_FIRST_ANSWER', 'DATE_LAST_MESSAGE', 'DATE_CLOSE',
+                'TIME_BOT', 'TIME_FIRST_ANSWER', 'TIME_ANSWER', 'TIME_CLOSE', 'TIME_DIALOG', 'WAIT_ANSWER', 'SEND_NO_ANSWER_TEXT', 'SEND_NO_WORK_TIME_TEXT'];
+            $rec['session'] = [];
+            foreach ($keep as $k) if (array_key_exists($k, $s['_session'])) $rec['session'][strtolower($k)] = str_starts_with($k, 'DATE_') ? b24x_dt($s['_session'][$k]) : $s['_session'][$k];
+        }
         foreach (['lead', 'deal', 'contact'] as $t) {
             $ids = $bb[$t] ?? [];
             if ($ids) $rec[$t] = b24x_crm_brief($data, $t, (int)max($ids));
@@ -678,7 +689,9 @@ function b24x_readme(array $data, int $dialogs): string
         'dialogs.jsonl — по строке JSON на сессию открытой линии: линия, канал, ответственный, лид/сделка/контакт (последние привязанные; все — в all_links), реплики с временем и автором.',
         'author_type: client — клиент, manager — сотрудник, bot — бот, system — служебные сообщения Битрикса (' . ($data['system'] ? 'включены' : 'исключены: переводы, «принят», «закрыт» и т. п.') . ').',
         'dialogs.txt — то же для чтения глазами. messages.csv — все реплики таблицей (Excel).',
-        'Диалоги берутся из дел CRM открытых линий: сессии линий без связи с CRM сюда не попадают.'];
+        ($data['source'] ?? 'rest') === 'db'
+            ? 'Источник — база Битрикса: все сессии открытых линий периода; в поле session — данные сессии (время первого ответа, worktime — по настройкам линии, и т. п.).'
+            : 'Диалоги берутся из дел CRM открытых линий: сессии линий без связи с CRM сюда не попадают.'];
     if ($data['ref']->warnings) { $L[] = ''; $L[] = 'Предупреждения:'; foreach ($data['ref']->warnings as $w) $L[] = '- ' . $w; }
     return implode("\n", $L) . "\n";
 }
@@ -798,7 +811,7 @@ function b24x_crm_xlsx(array $data): string
     }
 
     $info = [['Параметр', 'Значение'],
-        ['Портал', b24_portal_x()], ['Период', $data['from'] . ' — ' . $data['to']], ['Часовой пояс', tz_label()], ['Собрано', (new DateTimeImmutable('now', app_tz()))->format('d.m.Y H:i')],
+        ['Портал', b24_portal_x()], ['Источник', ($data['source'] ?? 'rest') === 'db' ? 'база данных Битрикса (только чтение)' : 'REST API'], ['Период', $data['from'] . ' — ' . $data['to']], ['Часовой пояс', tz_label()], ['Собрано', (new DateTimeImmutable('now', app_tz()))->format('d.m.Y H:i')],
         ['Персональные данные', $mask ? 'замаскированы' : 'НЕ замаскированы'],
         ['Лиды созданные', count($data['leadsNew'])], ['Лиды закрытые (успех и провал)', count($data['leadsClosed'])],
         ['Сделки созданные', count($data['dealsNew'])], ['Сделки закрытые', count($data['dealsClosed'])],
@@ -935,7 +948,7 @@ function b24x_job_running(): ?array
 }
 
 /** Создать задание и запустить процесс. */
-function b24x_job_start(array $params, string $user): array
+function b24x_job_start(array $params, string $user, string $password = ''): array
 {
     b24x_period((string)$params['from'], (string)$params['to']); // проверка дат сразу, до запуска
     b24x_jobs_cleanup();
@@ -947,7 +960,10 @@ function b24x_job_start(array $params, string $user): array
     $php = (string)cfg('php_cli', '/usr/bin/php');
     if (!is_file($php)) $php = 'php';
     $cmd = escapeshellarg($php) . ' ' . escapeshellarg(BOT_ROOT . '/bin/b24export.php') . ' ' . escapeshellarg($job['id']);
-    exec('nohup ' . $cmd . ' >> ' . escapeshellarg(data_dir() . '/b24export.log') . ' 2>&1 &');
+    // пароль MySQL — только в окружение дочернего процесса (не в файл задания, не в командную строку)
+    if ($password !== '') putenv('B24X_DBPASS=' . $password);
+    try { exec('nohup ' . $cmd . ' >> ' . escapeshellarg(data_dir() . '/b24export.log') . ' 2>&1 &'); }
+    finally { putenv('B24X_DBPASS'); }
     return $job;
 }
 
@@ -963,6 +979,9 @@ function b24x_job_cancel(string $id): void
 /** Тело задания (вызывается из bin/b24export.php). */
 function b24x_job_run(string $id): void
 {
+    $password = (string)getenv('B24X_DBPASS');
+    putenv('B24X_DBPASS');
+    unset($_ENV['B24X_DBPASS'], $_SERVER['B24X_DBPASS']);
     $job = b24x_job_get($id);
     if (!$job || $job['state'] !== 'queued') return;
     $job['state'] = 'running';
@@ -997,7 +1016,11 @@ function b24x_job_run(string $id): void
     };
     try {
         $p = $job['params'];
-        $data = b24x_collect((string)$p['from'], (string)$p['to'], ['mask' => (bool)$p['mask'], 'category' => (string)$p['category'], 'system' => !empty($p['system'])], $say);
+        $o = ['mask' => (bool)$p['mask'], 'category' => (string)$p['category'], 'system' => !empty($p['system'])];
+        $data = ($p['source'] ?? 'rest') === 'db'
+            ? b24db_collect((string)$p['from'], (string)$p['to'], $o, $say, $password)
+            : b24x_collect((string)$p['from'], (string)$p['to'], $o, $say);
+        $password = '';
         $say('сборка файла');
         $kind = (string)$p['kind'];
         if ($kind === 'dialogs') { $tmp = b24x_dialogs_zip($data); $ext = 'zip'; $name = 'b24_dialogs_' . $data['tag'] . '.zip'; }

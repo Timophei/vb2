@@ -38,6 +38,40 @@ PHP 8.3 + SQLite + OpenAI. Вторая версия визового бота: 
 - Период — до 6 месяцев. Сбор идёт фоновым процессом (`bin/b24export.php`, запускает админка) с паузой 250 мс между запросами и пакетами по 10 историй, ход и журнал шагов видны в админке, есть «Отменить». Готовый файл лежит в `data/exports` до скачивания (не дольше 3 часов) и удаляется после скачивания. Вебхук — `b24_export_webhook` (права crm, imopenlines, user), иначе `bitrix_webhook`. Кнопка «Проверить доступ» показывает права и пробную сессию.
 - Диалоги ищутся через дела CRM открытых линий (`IMOPENLINES_SESSION`): сессии без связи с CRM не попадают.
 
+### Выгрузка из базы Битрикса (рекомендуется)
+
+Читает MySQL портала напрямую (только SELECT) через SSH-туннель, который открывается на время выгрузки и сразу закрывается. Пароль MySQL не хранится — вводится в админке при каждом запуске и передаётся процессу выгрузки только через окружение. SSH-ключ лежит в `data/ssh` и на стороне Битрикса умеет только пробросить порт MySQL.
+
+1. **Сервер бота:** `sudo apt install php8.3-mysql && sudo systemctl restart php8.3-fpm`; в `config.php` — блок `b24_db` (см. `config.example.php`); админка → Настройки → Выгрузка → «Подключение к базе» → «Создать SSH-ключ», скопировать строку.
+2. **Сервер Битрикса — пользователь для туннеля:**
+   ```bash
+   sudo useradd -m -s /usr/sbin/nologin vb2tunnel
+   sudo install -d -m 700 -o vb2tunnel -g vb2tunnel /home/vb2tunnel/.ssh
+   sudo nano /home/vb2tunnel/.ssh/authorized_keys      # вставить строку из админки целиком
+   sudo chown vb2tunnel: /home/vb2tunnel/.ssh/authorized_keys && sudo chmod 600 /home/vb2tunnel/.ssh/authorized_keys
+   ```
+   Если в `/etc/ssh/sshd_config` есть `AllowUsers` / `AllowGroups` — добавить vb2tunnel; `AllowTcpForwarding` не должен быть `no`.
+3. **Сервер Битрикса — пользователь MySQL** (имя базы — в `/home/bitrix/www/bitrix/.settings.php`, обычно `sitemanager`):
+   ```sql
+   CREATE USER 'vb2_read'@'127.0.0.1' IDENTIFIED BY 'длинный-пароль';
+   CREATE USER 'vb2_read'@'localhost' IDENTIFIED BY 'длинный-пароль';
+   GRANT SELECT (ID, NAME, LAST_NAME, EXTERNAL_AUTH_ID) ON sitemanager.b_user TO 'vb2_read'@'127.0.0.1', 'vb2_read'@'localhost';
+   ```
+   и SELECT на нужные таблицы (только существующие в этой версии):
+   ```bash
+   sudo mysql -N sitemanager <<'SQL' | sudo mysql
+   SELECT CONCAT('GRANT SELECT ON `', TABLE_SCHEMA, '`.`', TABLE_NAME, '` TO ''vb2_read''@''127.0.0.1'', ''vb2_read''@''localhost'';')
+   FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (
+    'b_crm_lead','b_crm_deal','b_crm_contact','b_crm_status','b_crm_field_multi','b_crm_utm','b_crm_deal_category','b_crm_item_category',
+    'b_uts_crm_lead','b_uts_crm_deal','b_uts_crm_contact','b_user_field','b_user_field_lang','b_user_field_enum',
+    'b_imopenlines_session','b_imopenlines_config','b_im_message','b_im_message_param','b_crm_act','b_crm_act_bind','b_crm_act_comm');
+   SQL
+   ```
+   MySQL должен слушать `127.0.0.1:3306` (`ss -ltn | grep 3306`).
+4. **Админка:** «Проверить подключение к базе» с паролем — туннель, права, таблицы, пробная сессия.
+
+Каждый запрос ограничен 60 с (MAX_EXECUTION_TIME / max_statement_time), сессия MySQL — только чтение. Сессии открытых линий берутся все (и без CRM), в `dialogs.jsonl` у каждой есть поле `session` — время первого ответа, `worktime` по настройкам линии и т. п.
+
 ## Структура
 
 ```
