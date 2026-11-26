@@ -324,7 +324,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!can('users')) throw new RuntimeException('Выгрузка доступна только администратору.');
                 set_setting('b24x_category', (string)($_POST['category'] ?? ''));
                 $job = b24x_job_start(['from' => (string)$_POST['from'], 'to' => (string)$_POST['to'], 'kind' => (string)($_POST['kind'] ?? 'all'),
-                    'mask' => empty($_POST['nomask']), 'category' => (string)($_POST['category'] ?? '')], (string)$me['login']);
+                    'mask' => empty($_POST['nomask']), 'system' => !empty($_POST['system']), 'category' => (string)($_POST['category'] ?? '')], (string)$me['login']);
                 app_log('b24x start ' . $job['id'] . ' ' . $job['params']['from'] . '..' . $job['params']['to'] . ' ' . $job['params']['kind'] . ' by ' . $me['login'] . ($job['params']['mask'] ? '' : ' (без маскировки)'));
                 go('tab=settings#b24x', 'Выгрузка запущена. Ход показан ниже, файл можно будет скачать по готовности.');
             case 'b24x_cancel':

@@ -21,7 +21,7 @@ declare(strict_types=1);
 
 const B24X_TYPE = [1 => 'lead', 2 => 'deal', 3 => 'contact', 4 => 'company'];
 const B24X_MAX_DAYS = 186;          // период — не больше ~6 месяцев
-const B24X_PAUSE_MS = 250;          // пауза между запросами: портал рабочий, менеджеры в нём работают
+const B24X_PAUSE_MS = 500;          // пауза между запросами: портал рабочий, менеджеры в нём работают
 const B24X_HISTORY_BATCH = 10;      // историй переписки в одном пакете (они тяжёлые)
 
 /**
@@ -30,12 +30,16 @@ const B24X_HISTORY_BATCH = 10;      // историй переписки в од
  */
 $GLOBALS['B24X_HOOK'] = null;
 
-final class B24xCancelled extends RuntimeException {}
+/** Прерывание задания: отмена или слишком медленный портал. Не глотается внутренними catch. */
+class B24xAbort extends RuntimeException {}
+final class B24xCancelled extends B24xAbort {}
+
+const B24X_REQ_TIMEOUT = 60;  // запрос дольше — останавливаем всю выгрузку, чтобы не держать портал
 
 /** Отмену не глотаем в местах, где ошибка отдельного запроса не критична. */
 function b24x_rethrow(Throwable $e): void
 {
-    if ($e instanceof B24xCancelled) throw $e;
+    if ($e instanceof B24xAbort) throw $e;
 }
 
 /* ------------------------------------------------------------------ */
@@ -59,7 +63,7 @@ function b24x(string $method, array $params = []): array
         $t0 = microtime(true);
         $ch = curl_init($base . '/' . $method . '.json');
         curl_setopt_array($ch, [
-            CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 300, CURLOPT_CONNECTTIMEOUT => 20,
+            CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => B24X_REQ_TIMEOUT, CURLOPT_CONNECTTIMEOUT => 20,
             CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
             CURLOPT_POSTFIELDS => json_encode($params, JSON_UNESCAPED_UNICODE),
         ]);
@@ -70,8 +74,10 @@ function b24x(string $method, array $params = []): array
         $data = $raw === false ? null : json_decode((string)$raw, true);
         $limit = $code === 503 || (is_array($data) && in_array($data['error'] ?? '', ['QUERY_LIMIT_EXCEEDED', 'OPERATION_TIME_LIMIT'], true));
         if ($limit && $try < 6) { sleep(2 + 2 * $try); continue; }           // лимит портала — ждём и повторяем
-        if ($raw === false && $try < 1 && microtime(true) - $t0 < 60) { sleep(3); continue; } // обрыв связи — один повтор; таймаут не повторяем
-        if ($raw === false) throw new RuntimeException("Битрикс24 $method: " . (microtime(true) - $t0 >= 60 ? 'портал не ответил за ' . round(microtime(true) - $t0) . ' с' : 'нет соединения') . ": $err");
+        $slow = microtime(true) - $t0 >= B24X_REQ_TIMEOUT - 1;
+        if ($raw === false && $slow) throw new B24xAbort("Портал не ответил за " . B24X_REQ_TIMEOUT . " с на $method — выгрузка остановлена, чтобы не нагружать портал.");
+        if ($raw === false && $try < 1) { sleep(3); continue; } // обрыв связи — один повтор
+        if ($raw === false) throw new RuntimeException("Битрикс24 $method: нет соединения: $err");
         if (!is_array($data) || isset($data['error'])) {
             $msg = is_array($data) ? ($data['error'] . ': ' . ($data['error_description'] ?? '')) : mb_substr((string)$raw, 0, 300);
             throw new RuntimeException("$method (HTTP $code): $msg");
@@ -365,6 +371,7 @@ function b24x_collect(string $from, string $to, array $opt = [], ?callable $prog
 {
     @set_time_limit(0);
     $mask = $opt['mask'] ?? true;
+    $system = !empty($opt['system']);
     $dialogs = $opt['dialogs'] ?? true;
     $say = $progress ?? fn($s) => null;
     [$a, $b, $tag] = b24x_period($from, $to);
@@ -380,8 +387,16 @@ function b24x_collect(string $from, string $to, array $opt = [], ?callable $prog
     $say('сделки');
     $dealFilter = [];
     if (isset($opt['category']) && $opt['category'] !== '' && $opt['category'] !== null) $dealFilter['CATEGORY_ID'] = (int)$opt['category'];
-    $dealsNew = b24x_list('crm.deal.list', $dealFilter + ['>=DATE_CREATE' => $a, '<=DATE_CREATE' => $b], ['*', 'UF_*']);
-    $dealsClosed = b24x_list('crm.deal.list', $dealFilter + ['CLOSED' => 'Y', '>=CLOSEDATE' => $a, '<=CLOSEDATE' => $b], ['*', 'UF_*']);
+    // сделки: список — только основные поля (лёгкий запрос), пользовательские поля — потом по ID
+    $dealCore = ['ID', 'TITLE', 'CATEGORY_ID', 'STAGE_ID', 'CLOSED', 'CLOSEDATE', 'DATE_CREATE', 'OPPORTUNITY', 'CURRENCY_ID', 'SOURCE_ID',
+        'IS_RETURN_CUSTOMER', 'IS_REPEATED_APPROACH', 'ASSIGNED_BY_ID', 'LEAD_ID', 'CONTACT_ID', 'COMPANY_ID', 'COMMENTS'];
+    $dealsNew = b24x_list('crm.deal.list', $dealFilter + ['>=DATE_CREATE' => $a, '<=DATE_CREATE' => $b], $dealCore, fn($n) => $say("сделки созданные: $n"));
+    $say('сделки закрытые');
+    $dealsClosed = b24x_list('crm.deal.list', $dealFilter + ['CLOSED' => 'Y', '>=CLOSEDATE' => $a, '<=CLOSEDATE' => $b], $dealCore, fn($n) => $say("сделки закрытые: $n"));
+    $say('поля сделок');
+    $uf = b24x_by_ids('crm.deal.list', array_merge(array_column($dealsNew, 'ID'), array_column($dealsClosed, 'ID')), ['ID', 'UF_*']);
+    foreach ([&$dealsNew, &$dealsClosed] as &$set) foreach ($set as &$d) $d += $uf[(int)$d['ID']] ?? [];
+    unset($set, $d);
     $say('контакты');
     $contactsNew = b24x_list('crm.contact.list', ['>=DATE_CREATE' => $a, '<=DATE_CREATE' => $b], $crmSel);
 
@@ -468,7 +483,7 @@ function b24x_collect(string $from, string $to, array $opt = [], ?callable $prog
     $leads += b24x_by_ids('crm.lead.list', array_diff($leadIds, array_keys($leads)), $crmSel);
     $deals = [];
     foreach (array_merge($dealsNew, $dealsClosed) as $d) $deals[(int)$d['ID']] = $d;
-    $deals += b24x_by_ids('crm.deal.list', array_diff($dealIds, array_keys($deals)), ['*', 'UF_*']);
+    $deals += b24x_by_ids('crm.deal.list', array_diff($dealIds, array_keys($deals)), array_merge($dealCore, ['UF_*']));
     foreach ($deals as $d) { $leadIds[] = (int)$d['LEAD_ID']; $contactIds[] = (int)$d['CONTACT_ID']; }
     $leads += b24x_by_ids('crm.lead.list', array_diff($leadIds, array_keys($leads)), $crmSel);
     $contacts = [];
@@ -479,11 +494,14 @@ function b24x_collect(string $from, string $to, array $opt = [], ?callable $prog
     $fromLeads = [];
     $newLeadIds = array_map(fn($l) => (int)$l['ID'], $leadsNew);
     foreach (array_chunk($newLeadIds, 50) as $chunk) {
-        foreach (b24x('crm.deal.list', ['filter' => $dealFilter + ['@LEAD_ID' => $chunk], 'select' => ['*', 'UF_*'], 'start' => -1])['result'] ?? [] as $d) {
+        foreach (b24x('crm.deal.list', ['filter' => $dealFilter + ['@LEAD_ID' => $chunk], 'select' => $dealCore, 'start' => -1])['result'] ?? [] as $d) {
             $deals[(int)$d['ID']] ??= $d;
             $fromLeads[(int)$d['LEAD_ID']][] = (int)$d['ID'];
         }
     }
+    $need = [];
+    foreach ($deals as $id => $d) if (!array_filter(array_keys($d), fn($k) => str_starts_with((string)$k, 'UF_'))) $need[] = $id;
+    foreach (b24x_by_ids('crm.deal.list', $need, ['ID', 'UF_*']) as $id => $u) $deals[$id] += $u;
 
     $users = [];
     foreach ([$leads, $deals, $contacts] as $set) foreach ($set as $r) $users[] = (int)($r['ASSIGNED_BY_ID'] ?? 0);
@@ -491,7 +509,7 @@ function b24x_collect(string $from, string $to, array $opt = [], ?callable $prog
     $say('имена сотрудников');
     $ref->needUsers($users);
 
-    return compact('ref', 'mask', 'tag', 'from', 'to', 'leadsNew', 'leadsClosed', 'dealsNew', 'dealsClosed', 'contactsNew', 'calls', 'sessions', 'hist', 'leads', 'deals', 'contacts', 'fromLeads') + ['binding' => $binding];
+    return compact('ref', 'mask', 'system', 'tag', 'from', 'to', 'leadsNew', 'leadsClosed', 'dealsNew', 'dealsClosed', 'contactsNew', 'calls', 'sessions', 'hist', 'leads', 'deals', 'contacts', 'fromLeads') + ['binding' => $binding];
 }
 
 /* ------------------------------------------------------------------ */
@@ -602,6 +620,7 @@ function b24x_dialog_records(array $data): array
             }
             if ($files) $text = trim($text . ' [вложение: ' . implode('; ', $files) . ']');
             if ($text === '' && !$files) continue;
+            if ($type === 'system' && empty($data['system'])) continue; // «передан менеджеру», «принят» и пр. — по умолчанию не выгружаем
             $rec['messages'][] = ['id' => (int)$m['id'], 'at' => b24x_dt($m['date'] ?? ''), 'author_type' => $type,
                 'author' => $type === 'system' ? 'Система' : ($name ?: '#' . $author), 'text' => $mask ? b24x_mask_text($text) : $text];
         }
@@ -657,7 +676,7 @@ function b24x_readme(array $data, int $dialogs): string
     $L = ['Выгрузка Битрикс24 ' . b24_portal_x() . ' за ' . $data['from'] . ' — ' . $data['to'] . ' (время: ' . tz_label() . ')',
         'Собрано: ' . (new DateTimeImmutable('now', app_tz()))->format('d.m.Y H:i') . ' · диалогов: ' . $dialogs . ' · персональные данные ' . ($data['mask'] ? 'замаскированы' : 'НЕ замаскированы'), '',
         'dialogs.jsonl — по строке JSON на сессию открытой линии: линия, канал, ответственный, лид/сделка/контакт (последние привязанные; все — в all_links), реплики с временем и автором.',
-        'author_type: client — клиент, manager — сотрудник, bot — бот, system — служебные сообщения Битрикса.',
+        'author_type: client — клиент, manager — сотрудник, bot — бот, system — служебные сообщения Битрикса (' . ($data['system'] ? 'включены' : 'исключены: переводы, «принят», «закрыт» и т. п.') . ').',
         'dialogs.txt — то же для чтения глазами. messages.csv — все реплики таблицей (Excel).',
         'Диалоги берутся из дел CRM открытых линий: сессии линий без связи с CRM сюда не попадают.'];
     if ($data['ref']->warnings) { $L[] = ''; $L[] = 'Предупреждения:'; foreach ($data['ref']->warnings as $w) $L[] = '- ' . $w; }
@@ -978,7 +997,7 @@ function b24x_job_run(string $id): void
     };
     try {
         $p = $job['params'];
-        $data = b24x_collect((string)$p['from'], (string)$p['to'], ['mask' => (bool)$p['mask'], 'category' => (string)$p['category']], $say);
+        $data = b24x_collect((string)$p['from'], (string)$p['to'], ['mask' => (bool)$p['mask'], 'category' => (string)$p['category'], 'system' => !empty($p['system'])], $say);
         $say('сборка файла');
         $kind = (string)$p['kind'];
         if ($kind === 'dialogs') { $tmp = b24x_dialogs_zip($data); $ext = 'zip'; $name = 'b24_dialogs_' . $data['tag'] . '.zip'; }

@@ -723,6 +723,7 @@ function view_b24x(array $view): void
         </div>
         <?php if (!$pipes): ?><p class="hint">Воронки ещё не загружены — вкладка «Битрикс24» → «Загрузить с портала». Пока выгрузятся сделки всех воронок.</p><?php endif; ?>
         <label class="row" style="margin-top:8px"><input type="checkbox" name="nomask" value="1"> Без маскировки персональных данных (телефоны, почта, фамилии, номера карт видны полностью)</label>
+        <label class="row"><input type="checkbox" name="system" value="1"> Со служебными сообщениями Битрикса (переводы между операторами, «диалог принят / закрыт» — по умолчанию исключены, они раздувают файл)</label>
         <p class="hint">По умолчанию в телефонах скрыты 3 цифры (7914***4567), в почте — середина имени (iv***v@mail.ru), фамилии клиентов — до первой буквы, у номеров карт видны 4 последние цифры. Время — <?= h(tz_label()) ?>.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <?php $busy = b24x_job_running() !== null; ?>
