@@ -37,6 +37,9 @@ return [
     'bitrix_webhook'   => '',         // https://портал/rest/1/xxxxxxxx/
     // Режим записи в CRM: 'live' — пишем по-настоящему, 'dry' — только журнал «что бы отправили»
     'bitrix_mode'      => 'dry',
+    // Выгрузка для анализа (Настройки → Выгрузка): только чтение, bitrix_mode не влияет.
+    // Отдельный вебхук с правами crm, imopenlines, user; пусто — берётся bitrix_webhook.
+    'b24_export_webhook' => '',
 
     // --- Сайт и виджет ---
     'public_url'       => 'https://vb2.b-integration.ru',

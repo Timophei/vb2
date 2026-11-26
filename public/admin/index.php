@@ -303,6 +303,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             case 'settings_save':
                 foreach (['welcome', 'suggestions'] as $k) if (isset($_POST[$k])) set_setting($k, str_replace("\r\n", "\n", trim((string)$_POST[$k])));
                 go('tab=settings', 'Сохранено.');
+            case 'b24x_export':
+                if (!can('users')) throw new RuntimeException('Выгрузка доступна только администратору.');
+                set_setting('b24x_category', (string)($_POST['category'] ?? ''));
+                $kind = (string)($_POST['kind'] ?? 'all');
+                $data = b24x_collect((string)$_POST['from'], (string)$_POST['to'], ['mask' => empty($_POST['nomask']), 'category' => (string)($_POST['category'] ?? '')]);
+                app_log('b24x export ' . $kind . ' ' . $data['tag'] . ' by ' . $me['login'] . ($data['mask'] ? '' : ' (без маскировки)'));
+                if ($kind === 'dialogs') send_download(b24x_dialogs_zip($data), 'b24_dialogs_' . $data['tag'] . '.zip', 'application/zip');
+                if ($kind === 'crm') send_download(b24x_crm_xlsx($data), 'b24_crm_' . $data['tag'] . '.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                $dz = b24x_dialogs_zip($data);
+                $x = b24x_crm_xlsx($data);
+                $all = tempnam(sys_get_temp_dir(), 'b24a');
+                $zip = new ZipArchive();
+                $zip->open($all, ZipArchive::OVERWRITE);
+                $src = new ZipArchive();
+                $src->open($dz);
+                for ($i = 0; $i < $src->numFiles; $i++) $zip->addFromString('dialogs/' . $src->getNameIndex($i), (string)$src->getFromIndex($i));
+                $src->close();
+                $zip->addFile($x, 'b24_crm_' . $data['tag'] . '.xlsx');
+                $zip->close();
+                @unlink($dz); @unlink($x);
+                send_download($all, 'b24_export_' . $data['tag'] . '.zip', 'application/zip');
+            case 'b24x_check':
+                if (!can('users')) throw new RuntimeException('Только для администратора.');
+                $view['b24x_check'] = b24x_check();
+                $tab = 'settings';
+                break;
             case 'b24_reference':
                 $view['b24ref'] = b24_reference((int)(sc_setting(scenario_active(), 'hr.smart_entity_type_id') ?? 0));
                 $tab = 'bitrix';

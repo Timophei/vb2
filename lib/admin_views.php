@@ -690,6 +690,68 @@ function view_settings(array $view): void
     </div>
 
     <?php
+    if (can('users')) view_b24x($view);
+}
+
+/** Настройки → Выгрузка для анализа: диалоги открытых линий и CRM портала за период. */
+function view_b24x(array $view): void
+{
+    $tz = app_tz();
+    $first = new DateTimeImmutable('first day of last month', $tz);
+    $last = new DateTimeImmutable('last day of last month', $tz);
+    $pipes = b24_deal_pipelines();
+    $cat = setting('b24x_category');
+    if ($cat === '' && !isset($_SESSION['b24x_cat_seen'])) foreach ($pipes as $id => $p) if (mb_stripos($p['name'], 'продаж') !== false) { $cat = (string)$id; break; }
+    $_SESSION['b24x_cat_seen'] = 1;
+    ?>
+    <div class="card" id="b24x">
+      <h2>Выгрузка для анализа (Битрикс24)</h2>
+      <p class="hint">Данные портала <?= h(b24_portal_x() ?: '—') ?>, а не бота: все диалоги открытых линий всех сотрудников за период, лиды, сделки, контакты, звонки.
+        Только чтение. Файл собирается и сразу скачивается, на сервере не остаётся. За месяц — обычно 1–5 минут, не закрывайте вкладку.</p>
+      <form method="post" class="b24x-form"><?= csrf_field('b24x_export', ['back' => 'tab=settings#b24x']) ?>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">
+          <label>С <input type="date" name="from" required value="<?= h($first->format('Y-m-d')) ?>"></label>
+          <label>По <input type="date" name="to" required value="<?= h($last->format('Y-m-d')) ?>"></label>
+          <label>Воронка сделок
+            <select name="category">
+              <option value="">все воронки</option>
+              <?php foreach ($pipes as $id => $p): ?><option value="<?= h($id) ?>"<?= $cat === (string)$id ? ' selected' : '' ?>><?= h($p['name']) ?></option><?php endforeach; ?>
+            </select>
+          </label>
+        </div>
+        <?php if (!$pipes): ?><p class="hint">Воронки ещё не загружены — вкладка «Битрикс24» → «Загрузить с портала». Пока выгрузятся сделки всех воронок.</p><?php endif; ?>
+        <label class="row" style="margin-top:8px"><input type="checkbox" name="nomask" value="1"> Без маскировки персональных данных (телефоны, почта, фамилии, номера карт видны полностью)</label>
+        <p class="hint">По умолчанию в телефонах скрыты 3 цифры (7914***4567), в почте — середина имени (iv***v@mail.ru), фамилии клиентов — до первой буквы, у номеров карт видны 4 последние цифры. Время — <?= h(tz_label()) ?>.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button name="kind" value="dialogs">Диалоги (zip)</button>
+          <button name="kind" value="crm">CRM (xlsx)</button>
+          <button name="kind" value="all">Всё одним архивом</button>
+        </div>
+        <p class="hint b24x-wait" hidden style="margin-top:8px">Собираю данные с портала… Файл скачается сам, когда будет готов.</p>
+      </form>
+      <form method="post" style="margin-top:10px"><?= csrf_field('b24x_check', ['back' => 'tab=settings#b24x']) ?><button>Проверить доступ к порталу</button></form>
+      <?php if (!empty($view['b24x_check'])): ?>
+        <ul class="list" style="margin-top:8px">
+          <?php foreach ($view['b24x_check'] as [$k, $v, $ok]): ?><li><b class="<?= $ok ? 'good' : 'bad' ?>"><?= h($k) ?>:</b> <?= h($v) ?></li><?php endforeach; ?>
+        </ul>
+      <?php endif; ?>
+      <details style="margin-top:10px"><summary class="hint" style="display:inline;cursor:pointer">Что внутри</summary>
+        <ul class="list">
+          <li><b>Диалоги:</b> dialogs.jsonl (по строке на сессию: линия, канал, ответственный, лид/сделка/контакт, реплики с временем и автором — клиент, менеджер, бот, система), dialogs.txt для чтения, messages.csv.</li>
+          <li><b>CRM:</b> листы «Лиды созданные», «Лиды закрытые» (успех и провал по дате закрытия), «Сделки созданные», «Сделки закрытые», «Сделки из лидов периода» (вкл. созданные позже), «Контакты созданные», «Звонки», «Диалоги» (сводка по сессиям), «Сводка».</li>
+          <li>Связи: у лида — контакт и дата его создания, сделки из лида, сессии открытых линий, число звонков; у сделки — лид и «лид из другого периода»; флаги Битрикса «повторный» и «повторное обращение».</li>
+          <li>Вебхук: <code>b24_export_webhook</code> в config.php (если не задан — основной). Нужны права crm, imopenlines, желательно user (имена сотрудников).</li>
+        </ul>
+      </details>
+    </div>
+    <script>
+    document.querySelectorAll('.b24x-form').forEach(f => f.addEventListener('submit', () => {
+      const w = f.querySelector('.b24x-wait'); w.hidden = false;
+      setTimeout(() => f.querySelectorAll('button').forEach(b => b.disabled = true), 0); // после сбора полей формы, иначе потеряется kind
+      setTimeout(() => f.querySelectorAll('button').forEach(b => b.disabled = false), 3000); // скачивание не уводит со страницы
+    }));
+    </script>
+    <?php
 }
 
 
